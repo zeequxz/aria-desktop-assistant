@@ -73,6 +73,65 @@ def list_conversations(limit: int = 50) -> list:
     return results
 
 
+def search_conversations(query: str, limit: int = 50) -> list:
+    """Full-text search across saved conversations. Returns matches newest
+    first; each result has the same keys as list_conversations() plus 'snippet'.
+    Matches on the title and on message text (string or block content)."""
+    q = (query or "").strip().lower()
+    if not q:
+        return list_conversations(limit)
+
+    files = sorted(HISTORY_DIR.glob("*.json"), reverse=True)
+    results = []
+    for f in files:
+        try:
+            with open(f, "r", encoding="utf-8") as fp:
+                data = json.load(fp)
+        except Exception:
+            continue
+
+        title = data.get("title", f.stem)
+        snippet = ""
+        hit = q in title.lower()
+
+        for msg in data.get("messages", []):
+            text = _message_text(msg.get("content", ""))
+            idx = text.lower().find(q)
+            if idx != -1:
+                hit = True
+                start = max(0, idx - 30)
+                snippet = ("…" if start else "") + text[start:idx + 70].strip() + "…"
+                break
+
+        if hit:
+            results.append({
+                "filename": f.name,
+                "title": title,
+                "agent_id": data.get("agent_id", "assistant"),
+                "timestamp": data.get("timestamp", ""),
+                "message_count": data.get("message_count", 0),
+                "snippet": snippet,
+            })
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _message_text(content) -> str:
+    """Flatten a message's content (plain string or list of blocks) to text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(block.get("text", "") or "")
+            else:
+                parts.append(str(block))
+        return " ".join(parts)
+    return str(content)
+
+
 def load_conversation(filename: str) -> Optional[dict]:
     """Load a saved conversation by filename."""
     path = HISTORY_DIR / filename

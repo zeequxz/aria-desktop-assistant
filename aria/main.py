@@ -43,18 +43,41 @@ except ImportError:
     PSUTIL = False
 
 # ── Colours ────────────────────────────────────────────────────────────────
-BG      = "#0d0d14"
-SURFACE = "#13131e"
-SURF2   = "#1a1a28"
-SURF3   = "#20202f"
-BORDER  = "#252535"
-ACCENT  = "#6c8fff"
-SUCCESS = "#5dba7d"
-WARNING = "#e8b84b"
-DANGER  = "#e05c5c"
-TEXT    = "#e4e4f0"
-MUTED   = "#6a6a85"
-PURPLE  = "#9b72ff"
+# Two palettes; the active one is chosen at startup from the "theme" setting.
+# (Switching applies on restart, since widgets read these as module constants.)
+_THEMES = {
+    "dark": {
+        "BG": "#0d0d14", "SURFACE": "#13131e", "SURF2": "#1a1a28", "SURF3": "#20202f",
+        "BORDER": "#252535", "ACCENT": "#6c8fff", "SUCCESS": "#5dba7d",
+        "WARNING": "#e8b84b", "DANGER": "#e05c5c", "TEXT": "#e4e4f0",
+        "MUTED": "#6a6a85", "PURPLE": "#9b72ff",
+    },
+    "light": {
+        "BG": "#f4f5fb", "SURFACE": "#ffffff", "SURF2": "#eef0f7", "SURF3": "#e3e6f0",
+        "BORDER": "#d4d8e6", "ACCENT": "#4665e0", "SUCCESS": "#2f9e5e",
+        "WARNING": "#b8860b", "DANGER": "#c84444", "TEXT": "#1a1c28",
+        "MUTED": "#7a7f95", "PURPLE": "#7d4ee0",
+    },
+}
+
+_active_theme = cfg.get("theme", "dark")
+if _active_theme not in _THEMES:
+    _active_theme = "dark"
+ctk.set_appearance_mode("light" if _active_theme == "light" else "dark")
+_P = _THEMES[_active_theme]
+
+BG      = _P["BG"]
+SURFACE = _P["SURFACE"]
+SURF2   = _P["SURF2"]
+SURF3   = _P["SURF3"]
+BORDER  = _P["BORDER"]
+ACCENT  = _P["ACCENT"]
+SUCCESS = _P["SUCCESS"]
+WARNING = _P["WARNING"]
+DANGER  = _P["DANGER"]
+TEXT    = _P["TEXT"]
+MUTED   = _P["MUTED"]
+PURPLE  = _P["PURPLE"]
 
 AGENT_COLORS = {
     "assistant": "#6c8fff",
@@ -63,6 +86,18 @@ AGENT_COLORS = {
     "researcher":"#e8b84b",
     "computer":  "#9b72ff",
 }
+
+# Palette offered when creating a custom agent.
+AGENT_PALETTE = ["#6c8fff", "#ff8c6c", "#5dba7d", "#e8b84b", "#9b72ff",
+                 "#e05c5c", "#4dc9c9", "#d06cff", "#ff6cae", "#7da0ff"]
+
+
+def agent_color(agent):
+    """Resolve an agent's accent colour: built-in map first, then the agent's
+    own 'color' field, then the default accent."""
+    if not agent:
+        return ACCENT
+    return AGENT_COLORS.get(agent.get("id"), agent.get("color", ACCENT))
 
 
 def tint(hex_color, alpha):
@@ -160,9 +195,13 @@ class ChatTab(ctk.CTkFrame):
 
         ctk.CTkLabel(left, text="HISTORY", font=("Segoe UI Semibold", 10),
                      text_color=MUTED).grid(row=3, column=0, sticky="w", padx=14, pady=(4, 4))
+        self.history_search = ctk.StringVar()
+        self.history_search.trace_add("write", lambda *a: self._refresh_history())
+        ctk.CTkEntry(left, textvariable=self.history_search, placeholder_text="🔍 Search chats…",
+                     height=30, font=F_SMALL).grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 4))
         self.history_frame = ctk.CTkScrollableFrame(left, fg_color="transparent")
-        self.history_frame.grid(row=4, column=0, sticky="nsew", padx=6, pady=(0, 6))
-        left.rowconfigure(4, weight=1)
+        self.history_frame.grid(row=5, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        left.rowconfigure(5, weight=1)
         self._refresh_history()
 
         # ── Right: chat ────────────────────────────────────────────────────
@@ -189,7 +228,8 @@ class ChatTab(ctk.CTkFrame):
         hdr_btns = ctk.CTkFrame(hdr, fg_color="transparent")
         hdr_btns.grid(row=0, column=2, padx=10)
         for txt, cmd in [("📷", self._attach_screenshot), ("📁", self._attach_file),
-                         ("🎤", self._toggle_voice), ("📋", self._copy_chat),
+                         ("🎤", self._toggle_voice), ("📝", self._open_prompt_library),
+                         ("📋", self._copy_chat),
                          ("⬇", self._export_chat), ("↩", self._save_and_clear)]:
             ctk.CTkButton(hdr_btns, text=txt, width=34, height=30,
                           fg_color=SURF2, border_color=BORDER, border_width=1,
@@ -269,21 +309,57 @@ class ChatTab(ctk.CTkFrame):
             w.destroy()
         agents = cfg.get("agents", [])
         for agent in agents:
-            color = AGENT_COLORS.get(agent["id"], ACCENT)
+            row = ctk.CTkFrame(self.agent_frame, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            row.columnconfigure(0, weight=1)
             ctk.CTkButton(
-                self.agent_frame,
-                text=f"{agent['icon']}  {agent['name']}",
+                row, text=f"{agent['icon']}  {agent['name']}",
                 anchor="w", height=40,
                 fg_color="transparent", hover_color=SURF2,
                 text_color=TEXT, font=F_BODY, corner_radius=8,
                 command=lambda a=agent: self._select_agent(a),
-            ).pack(fill="x", pady=1)
-        if agents:
+            ).grid(row=0, column=0, sticky="ew")
+            # Built-in agents can't be edited; custom ones get a pencil.
+            if not agent.get("builtin"):
+                ctk.CTkButton(row, text="✎", width=26, height=40, fg_color="transparent",
+                              hover_color=SURF2, text_color=MUTED, font=F_SMALL,
+                              command=lambda a=agent: self._edit_agent(a)).grid(row=0, column=1)
+
+        ctk.CTkButton(self.agent_frame, text="+ New agent", anchor="w", height=32,
+                      fg_color="transparent", hover_color=SURF2, text_color=ACCENT,
+                      font=F_SMALL, corner_radius=8,
+                      command=self._new_agent).pack(fill="x", pady=(4, 1))
+
+        if agents and not self.active_agent:
             self._select_agent(agents[0])
+
+    def _new_agent(self):
+        AgentDialog(self.root, on_save=self._save_agent)
+
+    def _edit_agent(self, agent):
+        AgentDialog(self.root, on_save=self._save_agent,
+                    on_delete=self._delete_agent, agent=agent)
+
+    def _save_agent(self, data):
+        agents = cfg.get("agents", [])
+        existing = next((a for a in agents if a["id"] == data["id"]), None)
+        if existing:
+            existing.update(data)
+        else:
+            agents.append(data)
+        cfg.set_key("agents", agents)
+        self._load_agents()
+
+    def _delete_agent(self, agent_id):
+        agents = [a for a in cfg.get("agents", []) if a["id"] != agent_id]
+        cfg.set_key("agents", agents)
+        if self.active_agent and self.active_agent["id"] == agent_id:
+            self.active_agent = None
+        self._load_agents()
 
     def _select_agent(self, agent):
         self.active_agent = agent
-        color = AGENT_COLORS.get(agent["id"], ACCENT)
+        color = agent_color(agent)
         self.agent_icon_lbl.configure(text=agent["icon"], text_color=color)
         self.agent_name_lbl.configure(text=agent["name"])
         self.agent_sub_lbl.configure(text=agent.get("desc", ""))
@@ -296,13 +372,14 @@ class ChatTab(ctk.CTkFrame):
     def _refresh_history(self):
         for w in self.history_frame.winfo_children():
             w.destroy()
-        convos = hist.list_conversations(limit=30)
+        query = self.history_search.get().strip() if hasattr(self, "history_search") else ""
+        convos = hist.search_conversations(query, limit=40) if query else hist.list_conversations(limit=30)
         if not convos:
-            ctk.CTkLabel(self.history_frame, text="No history yet", font=F_SMALL,
+            msg = "No matches" if query else "No history yet"
+            ctk.CTkLabel(self.history_frame, text=msg, font=F_SMALL,
                          text_color=MUTED).pack(pady=8)
             return
         for c in convos:
-            ts = c["timestamp"][:10] if c["timestamp"] else ""
             frame = ctk.CTkFrame(self.history_frame, fg_color="transparent", cursor="hand2")
             frame.pack(fill="x", pady=1)
             ctk.CTkButton(
@@ -311,6 +388,11 @@ class ChatTab(ctk.CTkFrame):
                 text_color=MUTED, font=F_SMALL, corner_radius=6,
                 command=lambda fn=c["filename"]: self._load_history(fn),
             ).pack(fill="x")
+            # When searching, show the matching snippet under the title.
+            if c.get("snippet"):
+                ctk.CTkLabel(frame, text=c["snippet"], font=("Segoe UI", 9),
+                             text_color=MUTED, anchor="w", justify="left",
+                             wraplength=170).pack(fill="x", padx=12)
 
     def _load_history(self, filename: str):
         data = hist.load_conversation(filename)
@@ -456,6 +538,13 @@ class ChatTab(ctk.CTkFrame):
         text = self.input_box.get("1.0", "end").strip()
         if not text or not self.active_agent:
             return
+
+        # Slash commands are handled locally and never sent to the model.
+        if text.startswith("/"):
+            self.input_box.delete("1.0", "end")
+            self._handle_slash(text)
+            return
+
         self.input_box.delete("1.0", "end")
 
         content = text
@@ -466,6 +555,59 @@ class ChatTab(ctk.CTkFrame):
         self.history_msgs.append({"role": "user", "content": content})
         self._append_msg("user", text)
         self._run_agent()
+
+    # ── Slash commands ───────────────────────────────────────────────────────
+
+    SLASH_HELP = (
+        "/new        Save & start a new chat\n"
+        "/clear      Same as /new\n"
+        "/export     Export conversation to a file\n"
+        "/copy       Copy conversation to clipboard\n"
+        "/regen      Regenerate the last response\n"
+        "/agent NAME Switch to an agent by name\n"
+        "/prompts    Open the prompt library\n"
+        "/help       Show this list"
+    )
+
+    def _handle_slash(self, text):
+        parts = text[1:].split(maxsplit=1)
+        cmd = parts[0].lower() if parts else ""
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if cmd in ("new", "clear"):
+            self._save_and_clear()
+        elif cmd == "export":
+            self._export_chat()
+        elif cmd == "copy":
+            self._copy_chat()
+        elif cmd in ("regen", "regenerate"):
+            self._regenerate()
+        elif cmd in ("prompts", "prompt"):
+            self._open_prompt_library()
+        elif cmd == "agent":
+            agents = cfg.get("agents", [])
+            match = next((a for a in agents if a["name"].lower() == arg.lower()), None) if arg else None
+            if match:
+                self._select_agent(match)
+                self._append_msg("tool", f"Switched to {match['name']}.")
+            else:
+                names = ", ".join(a["name"] for a in agents)
+                self._append_msg("tool", f"Unknown agent. Available: {names}")
+        elif cmd == "help":
+            self._append_msg("tool", "Slash commands:\n" + self.SLASH_HELP)
+        else:
+            self._append_msg("tool", f"Unknown command '/{cmd}'. Type /help for a list.")
+
+    # ── Prompt library ───────────────────────────────────────────────────────
+
+    def _open_prompt_library(self):
+        PromptLibraryDialog(self.root, on_pick=self._insert_prompt)
+
+    def _insert_prompt(self, prompt_text):
+        """Put a library prompt into the input box, ready to edit and send."""
+        self.input_box.delete("1.0", "end")
+        self.input_box.insert("end", prompt_text)
+        self.input_box.focus_set()
 
     def _regenerate(self):
         """Re-run the agent on the last user turn, discarding the last reply.
@@ -512,7 +654,7 @@ class ChatTab(ctk.CTkFrame):
         if not self._streaming:
             self._streaming = True
             agent_name = self.active_agent["name"] if self.active_agent else "ARIA"
-            color = AGENT_COLORS.get(self.active_agent["id"] if self.active_agent else "assistant", SUCCESS)
+            color = agent_color(self.active_agent)
             self.msg_box.configure(state="normal")
             self.msg_box.insert("end", f"\n\n{agent_name}\n", "ai_label")
             self.msg_box.tag_config("ai_label", foreground=color, font=F_BOLD)
@@ -579,7 +721,7 @@ class ChatTab(ctk.CTkFrame):
             self.msg_box.tag_config("user_label", foreground=ACCENT, font=F_BOLD)
         elif role == "assistant":
             agent_name = self.active_agent["name"] if self.active_agent else "ARIA"
-            color = AGENT_COLORS.get(self.active_agent["id"] if self.active_agent else "assistant", SUCCESS)
+            color = agent_color(self.active_agent)
             self.msg_box.insert("end", f"\n\n{agent_name}\n", "ai_lbl2")
             self.msg_box.insert("end", text + "\n")
             self.msg_box.tag_config("ai_lbl2", foreground=color, font=F_BOLD)
@@ -768,6 +910,204 @@ class TasksTab(ctk.CTkFrame):
     def on_task_done(self, task_id, name, result):
         self._running.discard(task_id)
         on_main(self.root, self._refresh)
+
+
+class AgentDialog(ctk.CTkToplevel):
+    """Create or edit a custom agent (name, icon, colour, system prompt)."""
+
+    ICONS = ["✦", "✍", "◫", "◈", "⌥", "★", "❖", "✸", "♦", "▲", "●", "✿"]
+
+    def __init__(self, master, on_save, on_delete=None, agent=None):
+        super().__init__(master)
+        self.on_save = on_save
+        self.on_delete = on_delete
+        self.agent = agent  # None when creating
+        self.title("Edit Agent" if agent else "New Agent")
+        self.geometry("520x560")
+        self.resizable(False, False)
+        self.configure(fg_color=SURFACE)
+        self.grab_set()
+        self._icon = (agent or {}).get("icon", self.ICONS[0])
+        self._color = (agent or {}).get("color", AGENT_PALETTE[0])
+        self._build()
+
+    def _build(self):
+        ctk.CTkLabel(self, text="Custom Agent", font=F_HEAD, text_color=TEXT
+                     ).pack(anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(self, text="Give it a name and a system prompt that defines its behaviour.",
+                     font=F_SMALL, text_color=MUTED).pack(anchor="w", padx=20, pady=(0, 12))
+
+        ctk.CTkLabel(self, text="Name", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20)
+        self.name_var = ctk.StringVar(value=(self.agent or {}).get("name", ""))
+        ctk.CTkEntry(self, textvariable=self.name_var, height=36, font=F_BODY,
+                     placeholder_text="e.g. Email Drafter").pack(fill="x", padx=20, pady=(4, 10))
+
+        ctk.CTkLabel(self, text="Short description (optional)", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20)
+        self.desc_var = ctk.StringVar(value=(self.agent or {}).get("desc", ""))
+        ctk.CTkEntry(self, textvariable=self.desc_var, height=36, font=F_BODY).pack(fill="x", padx=20, pady=(4, 10))
+
+        # Icon picker
+        ctk.CTkLabel(self, text="Icon", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20)
+        icon_row = ctk.CTkFrame(self, fg_color="transparent")
+        icon_row.pack(fill="x", padx=18, pady=(4, 10))
+        self._icon_btns = {}
+        for ic in self.ICONS:
+            b = ctk.CTkButton(icon_row, text=ic, width=34, height=34, font=F_HEAD,
+                              fg_color=SURF3 if ic == self._icon else SURF2,
+                              hover_color=SURF3, text_color=TEXT,
+                              command=lambda i=ic: self._pick_icon(i))
+            b.pack(side="left", padx=2)
+            self._icon_btns[ic] = b
+
+        # Colour picker
+        ctk.CTkLabel(self, text="Colour", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20)
+        col_row = ctk.CTkFrame(self, fg_color="transparent")
+        col_row.pack(fill="x", padx=18, pady=(4, 10))
+        self._col_btns = {}
+        for col in AGENT_PALETTE:
+            b = ctk.CTkButton(col_row, text="✓" if col == self._color else "", width=30, height=30,
+                              fg_color=col, hover_color=col, text_color="white",
+                              command=lambda c=col: self._pick_color(c))
+            b.pack(side="left", padx=2)
+            self._col_btns[col] = b
+
+        ctk.CTkLabel(self, text="System prompt", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20)
+        self.sys_box = ctk.CTkTextbox(self, height=110, font=F_BODY, fg_color=SURF2,
+                                      text_color=TEXT, border_width=0)
+        self.sys_box.pack(fill="x", padx=20, pady=(4, 12))
+        self.sys_box.insert("end", (self.agent or {}).get("system", ""))
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=20, pady=(0, 16))
+        ctk.CTkButton(btns, text="Save", height=40, fg_color=ACCENT, hover_color="#8aa5ff",
+                      text_color="white", font=F_BOLD, command=self._save
+                      ).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        if self.agent and self.on_delete:
+            ctk.CTkButton(btns, text="Delete", height=40, width=90,
+                          fg_color=tint(DANGER, 0x22), hover_color=tint(DANGER, 0x44),
+                          text_color=DANGER, font=F_BODY, command=self._delete
+                          ).pack(side="left", padx=4)
+        ctk.CTkButton(btns, text="Cancel", height=40, width=80, fg_color=SURF2,
+                      hover_color=BORDER, text_color=MUTED, font=F_BODY,
+                      command=self.destroy).pack(side="left", padx=(4, 0))
+
+    def _pick_icon(self, ic):
+        self._icon = ic
+        for k, b in self._icon_btns.items():
+            b.configure(fg_color=SURF3 if k == ic else SURF2)
+
+    def _pick_color(self, col):
+        self._color = col
+        for k, b in self._col_btns.items():
+            b.configure(text="✓" if k == col else "")
+
+    def _save(self):
+        name = self.name_var.get().strip()
+        system = self.sys_box.get("1.0", "end").strip()
+        if not name or not system:
+            messagebox.showwarning("Missing info", "Name and system prompt are required.")
+            return
+        data = {
+            "id": self.agent["id"] if self.agent else f"custom_{uuid.uuid4().hex[:8]}",
+            "name": name,
+            "desc": self.desc_var.get().strip(),
+            "icon": self._icon,
+            "color": self._color,
+            "system": system,
+            "builtin": False,
+        }
+        self.on_save(data)
+        self.destroy()
+
+    def _delete(self):
+        if messagebox.askyesno("Delete agent", f"Delete '{self.agent['name']}'?"):
+            self.on_delete(self.agent["id"])
+            self.destroy()
+
+
+class PromptLibraryDialog(ctk.CTkToplevel):
+    """Browse, use, add, and delete reusable prompts. Picking one inserts it
+    into the chat input box."""
+
+    def __init__(self, master, on_pick):
+        super().__init__(master)
+        self.on_pick = on_pick
+        self.title("Prompt Library")
+        self.geometry("460x520")
+        self.configure(fg_color=SURFACE)
+        self.grab_set()
+        self._build()
+
+    def _build(self):
+        ctk.CTkLabel(self, text="📝 Prompt Library", font=F_HEAD, text_color=TEXT
+                     ).pack(anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(self, text="Click a prompt to drop it into the chat box.",
+                     font=F_SMALL, text_color=MUTED).pack(anchor="w", padx=20, pady=(0, 10))
+
+        self.list_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.list_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+        add = ctk.CTkFrame(self, fg_color=SURF2, corner_radius=10)
+        add.pack(fill="x", padx=14, pady=(0, 14))
+        ctk.CTkLabel(add, text="New prompt", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=10, pady=(8, 2))
+        self.new_name = ctk.CTkEntry(add, placeholder_text="Name", height=32, font=F_SMALL)
+        self.new_name.pack(fill="x", padx=10, pady=2)
+        self.new_text = ctk.CTkTextbox(add, height=60, font=F_SMALL, fg_color=SURFACE,
+                                       text_color=TEXT, border_width=0)
+        self.new_text.pack(fill="x", padx=10, pady=2)
+        ctk.CTkButton(add, text="+ Add prompt", height=32, fg_color=ACCENT,
+                      hover_color="#8aa5ff", text_color="white", font=F_SMALL,
+                      command=self._add).pack(fill="x", padx=10, pady=(2, 10))
+
+        self._refresh()
+
+    def _refresh(self):
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        prompts = cfg.get("prompt_library", [])
+        if not prompts:
+            ctk.CTkLabel(self.list_frame, text="No prompts yet. Add one below.",
+                         font=F_BODY, text_color=MUTED).pack(pady=20)
+            return
+        for i, p in enumerate(prompts):
+            row = ctk.CTkFrame(self.list_frame, fg_color=SURF2, corner_radius=10)
+            row.pack(fill="x", pady=3)
+            row.columnconfigure(0, weight=1)
+            preview = p.get("text", "").strip().replace("\n", " ")
+            preview = preview[:50] + ("…" if len(preview) > 50 else "")
+            ctk.CTkButton(row, text=p.get("name", "Prompt"), anchor="w",
+                          fg_color="transparent", hover_color=SURF3, text_color=TEXT,
+                          font=F_BOLD, height=30, command=lambda t=p.get("text", ""): self._pick(t)
+                          ).grid(row=0, column=0, sticky="ew", padx=(8, 0), pady=(6, 0))
+            ctk.CTkButton(row, text="✕", width=28, height=28, fg_color="transparent",
+                          hover_color=tint(DANGER, 0x33), text_color=DANGER, font=F_SMALL,
+                          command=lambda idx=i: self._delete(idx)).grid(row=0, column=1, rowspan=2, padx=4)
+            ctk.CTkLabel(row, text=preview, font=F_SMALL, text_color=MUTED, anchor="w"
+                         ).grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+
+    def _pick(self, text):
+        self.on_pick(text)
+        self.destroy()
+
+    def _add(self):
+        name = self.new_name.get().strip()
+        text = self.new_text.get("1.0", "end").strip()
+        if not name or not text:
+            messagebox.showwarning("Missing info", "Enter both a name and prompt text.")
+            return
+        prompts = cfg.get("prompt_library", [])
+        prompts.append({"name": name, "text": text})
+        cfg.set_key("prompt_library", prompts)
+        self.new_name.delete(0, "end")
+        self.new_text.delete("1.0", "end")
+        self._refresh()
+
+    def _delete(self, idx):
+        prompts = cfg.get("prompt_library", [])
+        if 0 <= idx < len(prompts):
+            prompts.pop(idx)
+            cfg.set_key("prompt_library", prompts)
+            self._refresh()
 
 
 class TaskDialog(ctk.CTkToplevel):
@@ -1341,6 +1681,12 @@ class SettingsTab(ctk.CTkScrollableFrame):
                       command=self._browse).grid(row=0, column=1, padx=(8,0))
 
         # Behaviour
+        section("Appearance")
+        lbl("Theme (applies after restart)")
+        self.theme_var = ctk.StringVar(value=s.get("theme", "dark"))
+        ctk.CTkComboBox(self, variable=self.theme_var, height=38, font=F_BODY,
+                        values=["dark", "light"], dropdown_fg_color=SURF2).pack(fill="x", pady=(4, 12))
+
         section("Behaviour")
         checks = [
             ("computer_use_enabled", "Enable Computer Use (AI controls mouse & keyboard)"),
@@ -1406,11 +1752,16 @@ class SettingsTab(ctk.CTkScrollableFrame):
         s["workspace_folder"] = self.workspace.get()
         s["max_tokens"] = int(self.max_tokens.get())
         s["github_repo"] = self.github_repo.get().strip()
+        theme_changed = s.get("theme") != self.theme_var.get()
+        s["theme"] = self.theme_var.get()
         for key, var in self._check_vars.items():
             s[key] = var.get()
         cfg.save(s)
         self.on_saved()
-        messagebox.showinfo("Saved", "Settings saved!")
+        msg = "Settings saved!"
+        if theme_changed:
+            msg += "\n\nRestart ARIA to apply the new theme."
+        messagebox.showinfo("Saved", msg)
 
     def _check_updates(self):
         """Manual update check. Saves the repo field first so the check uses
