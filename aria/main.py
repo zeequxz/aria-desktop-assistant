@@ -1777,6 +1777,7 @@ class SettingsTab(ctk.CTkScrollableFrame):
         s["ollama_url"] = self.ollama_url.get()
         s["claude_api_key"] = self.claude_key.get()
         s["openai_api_key"] = self.openai_key.get()
+        s["openai_auth_mode"] = self.openai_auth_mode.get()
         s["workspace_folder"] = self.workspace.get()
         s["max_tokens"] = int(self.max_tokens.get())
         s["github_repo"] = self.github_repo.get().strip()
@@ -1800,6 +1801,29 @@ class SettingsTab(ctk.CTkScrollableFrame):
                 status_cb=lambda text: self.update_status.configure(text=text))
         else:
             self.update_status.configure(text="Update check unavailable.")
+
+    # ── OpenAI ChatGPT sign-in (Codex OAuth) ─────────────────────────────────
+
+    def _oauth_signin(self):
+        from agent import openai_oauth
+        self.oauth_status.configure(text="Opening browser…", text_color=ACCENT)
+
+        def done(_tokens):
+            on_main(self, lambda: (
+                self.oauth_status.configure(text="✓ Signed in", text_color=SUCCESS),
+                self.openai_auth_mode.set("oauth")))
+
+        def fail(msg):
+            on_main(self, lambda: self.oauth_status.configure(
+                text=msg[:60], text_color=DANGER))
+
+        openai_oauth.start_login(on_success=done, on_error=fail)
+
+    def _oauth_signout(self):
+        from agent import openai_oauth
+        openai_oauth.clear_tokens()
+        self.oauth_status.configure(text="Not signed in", text_color=MUTED)
+        self.openai_auth_mode.set("apikey")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
