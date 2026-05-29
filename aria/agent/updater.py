@@ -34,7 +34,7 @@ from config import settings as cfg
 CURRENT_VERSION = "1.0.0"
 
 # Used only if the user hasn't set "github_repo" in settings.
-DEFAULT_REPO = "yourusername/aria-desktop-assistant"
+DEFAULT_REPO = "zeequxz/aria-desktop-assistant"
 
 
 # ── Version helpers ──────────────────────────────────────────────────────────
