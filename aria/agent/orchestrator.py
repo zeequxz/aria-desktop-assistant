@@ -189,12 +189,23 @@ class AgentOrchestrator:
         if not OPENAI_AVAILABLE:
             self.on_error("openai not installed. Run: pip install openai")
             return
-        api_key = s.get("openai_api_key", "")
-        if not api_key:
-            self.on_error("No OpenAI API key. Go to Settings.")
-            return
 
-        client = openai.OpenAI(api_key=api_key)
+        # Two auth modes: a normal platform API key, or "Sign in with ChatGPT"
+        # (Codex OAuth), which sends the subscription bearer token to the
+        # ChatGPT backend base URL instead of api.openai.com.
+        if s.get("openai_auth_mode") == "oauth":
+            from agent import openai_oauth
+            token = openai_oauth.get_access_token()
+            if not token:
+                self.on_error("Not signed in with ChatGPT. Go to Settings → Sign in.")
+                return
+            client = openai.OpenAI(api_key=token, base_url=openai_oauth.CHATGPT_BASE_URL)
+        else:
+            api_key = s.get("openai_api_key", "")
+            if not api_key:
+                self.on_error("No OpenAI API key. Go to Settings.")
+                return
+            client = openai.OpenAI(api_key=api_key)
         model = s.get("openai_model", "gpt-4o")
         all_tools, schemas = _build_tool_registry(use_computer, use_browser)
 

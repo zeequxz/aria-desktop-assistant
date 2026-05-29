@@ -29,6 +29,8 @@ DEFAULTS = {
     "ollama_url": "http://localhost:11434",
     "claude_api_key": "",
     "openai_api_key": "",
+    # "apikey" = use openai_api_key; "oauth" = use Sign in with ChatGPT (Codex).
+    "openai_auth_mode": "apikey",
     "computer_use_enabled": False,
     "screenshot_interval": 2,
     "theme": "dark",

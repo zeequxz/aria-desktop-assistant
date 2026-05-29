@@ -1667,6 +1667,34 @@ class SettingsTab(ctk.CTkScrollableFrame):
         ctk.CTkEntry(self, textvariable=self.openai_key, show="•", height=38, font=F_BODY,
                      placeholder_text="sk-...").pack(fill="x", pady=(4,12))
 
+        # "Sign in with ChatGPT" (Codex OAuth) as an alternative to the key.
+        from agent import openai_oauth
+        oauth_row = ctk.CTkFrame(self, fg_color=SURF2, corner_radius=10)
+        oauth_row.pack(fill="x", pady=(0, 12))
+        ctk.CTkLabel(oauth_row, text="Or use your ChatGPT subscription (Codex OAuth)",
+                     font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=10, pady=(8, 0))
+        ctk.CTkLabel(oauth_row,
+                     text="Uses your ChatGPT Plus/Pro plan instead of a per-token API key.\n"
+                          "Community flow (like OpenClaw); OpenAI could change it at any time.",
+                     font=F_SMALL, text_color=MUTED, justify="left").pack(anchor="w", padx=10)
+        self.openai_auth_mode = ctk.StringVar(value=s.get("openai_auth_mode", "apikey"))
+        ctk.CTkCheckBox(oauth_row, text="Use ChatGPT sign-in instead of API key",
+                        variable=self.openai_auth_mode, onvalue="oauth", offvalue="apikey",
+                        font=F_SMALL, text_color=TEXT).pack(anchor="w", padx=10, pady=(6, 2))
+        signin_row = ctk.CTkFrame(oauth_row, fg_color="transparent")
+        signin_row.pack(fill="x", padx=10, pady=(2, 10))
+        self.oauth_status = ctk.CTkLabel(
+            signin_row,
+            text=("✓ Signed in" if openai_oauth.is_signed_in() else "Not signed in"),
+            font=F_SMALL, text_color=(SUCCESS if openai_oauth.is_signed_in() else MUTED))
+        self.oauth_status.pack(side="left")
+        ctk.CTkButton(signin_row, text="Sign out", width=80, height=30, fg_color=SURF3,
+                      hover_color=BORDER, text_color=MUTED, font=F_SMALL,
+                      command=self._oauth_signout).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(signin_row, text="Sign in with ChatGPT", width=170, height=30,
+                      fg_color=ACCENT, hover_color="#8aa5ff", text_color="white",
+                      font=F_SMALL, command=self._oauth_signin).pack(side="right")
+
         # Workspace
         section("Workspace")
         lbl("Default folder")
