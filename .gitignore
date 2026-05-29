@@ -17,7 +17,9 @@ ENV/
 # GitHub Release assets instead of being committed.
 build/
 dist/
+release/
 *.manifest
+*.zip
 
 # ── App-local runtime data ───────────────────────────────────────────────────
 # Real data lives in %APPDATA%\ARIA; ignore any stray copies in the working tree.
