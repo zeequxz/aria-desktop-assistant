@@ -1,0 +1,40 @@
+# Core AI
+anthropic>=0.40.0
+openai>=1.50.0
+
+# GUI
+customtkinter>=5.2.2
+Pillow>=10.0.0
+pystray>=0.19.5
+
+# Computer control
+pyautogui>=0.9.54
+pyperclip>=1.8.2
+pynput>=1.7.6
+screeninfo>=0.8.1
+
+# Office files
+python-docx>=1.1.0
+openpyxl>=3.1.0
+
+# Browser automation
+playwright>=1.44.0
+
+# Scheduling & system
+schedule>=1.2.1
+psutil>=5.9.0
+requests>=2.31.0
+
+# Voice input (optional - comment out if not needed)
+# faster-whisper>=1.0.0
+# sounddevice>=0.4.6
+# numpy>=1.26.0
+
+# Web search
+duckduckgo-search>=6.1.0
+
+# Notifications (Windows)
+win10toast>=0.9; sys_platform == "win32"
+
+# Packaging (run separately: pip install pyinstaller)
+# pyinstaller>=6.0.0

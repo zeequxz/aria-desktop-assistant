@@ -1,0 +1,1747 @@
+"""
+main.py - ARIA Desktop AI Assistant
+Full-featured GUI with system tray, history, memory panel,
+clipboard watcher, voice input, health monitor, and plugin browser.
+"""
+
+import threading
+import json
+import uuid
+import os
+import sys
+import time
+import platform
+import calendar as _calendar
+from datetime import datetime, date, timedelta
+from pathlib import Path
+from tkinter import filedialog, messagebox
+import tkinter as tk
+
+try:
+    import customtkinter as ctk
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+except ImportError:
+    print("Install CustomTkinter: pip install customtkinter")
+    sys.exit(1)
+
+from config import settings as cfg
+from agent.orchestrator import run_agent_in_thread
+from agent.scheduler import TaskScheduler
+from agent.tray import TrayManager, send_notification
+from agent.clipboard_watcher import ClipboardWatcher
+from agent.voice import VoiceRecorder
+from agent import memory as mem
+from agent import history as hist
+from agent.plugins import get_plugin_info
+from agent import updater
+
+try:
+    import psutil
+    PSUTIL = True
+except ImportError:
+    PSUTIL = False
+
+# ── Colours ────────────────────────────────────────────────────────────────
+BG      = "#0d0d14"
+SURFACE = "#13131e"
+SURF2   = "#1a1a28"
+SURF3   = "#20202f"
+BORDER  = "#252535"
+ACCENT  = "#6c8fff"
+SUCCESS = "#5dba7d"
+WARNING = "#e8b84b"
+DANGER  = "#e05c5c"
+TEXT    = "#e4e4f0"
+MUTED   = "#6a6a85"
+PURPLE  = "#9b72ff"
+
+AGENT_COLORS = {
+    "assistant": "#6c8fff",
+    "writer":    "#ff8c6c",
+    "organizer": "#5dba7d",
+    "researcher":"#e8b84b",
+    "computer":  "#9b72ff",
+}
+
+
+def tint(hex_color, alpha):
+    """Blend hex_color over the app background at the given alpha (0-255) and
+    return a solid #RRGGBB. Tkinter has no alpha channel, so 8-digit #RRGGBBAA
+    values are invalid; this fakes the same translucent look with a solid color.
+    `alpha` may be an int (0-255) or a 2-char hex string like "33"."""
+    if isinstance(alpha, str):
+        alpha = int(alpha, 16)
+    fg = hex_color.lstrip("#")
+    bg = BG.lstrip("#")
+    fr, fg_, fb = int(fg[0:2], 16), int(fg[2:4], 16), int(fg[4:6], 16)
+    br, bg_, bb = int(bg[0:2], 16), int(bg[2:4], 16), int(bg[4:6], 16)
+    a = alpha / 255
+    r = round(fr * a + br * (1 - a))
+    g = round(fg_ * a + bg_ * (1 - a))
+    b = round(fb * a + bb * (1 - a))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+F_BODY  = ("Segoe UI", 13)
+F_SMALL = ("Segoe UI", 11)
+F_BOLD  = ("Segoe UI Semibold", 13)
+F_HEAD  = ("Segoe UI Semibold", 16)
+F_TITLE = ("Segoe UI Bold", 22)
+F_MONO  = ("Cascadia Code", 12)
+
+
+def on_main(root, fn):
+    try:
+        root.after(0, fn)
+    except Exception:
+        pass
+
+
+def task_occurs_on(task, d):
+    """Return True if `task` is scheduled to run on date `d` (a datetime.date).
+    Used by the calendar to mark days. Recurring tasks repeat by their rule;
+    'once' tasks match only their exact run_date."""
+    interval = task.get("interval", "none")
+    if interval in ("hourly", "daily"):
+        return True
+    anchor = task.get("run_date")
+    if interval == "once":
+        return anchor == d.strftime("%Y-%m-%d")
+    if not anchor:
+        return False
+    try:
+        ad = datetime.strptime(anchor, "%Y-%m-%d").date()
+    except Exception:
+        return False
+    if d < ad:
+        return False  # don't show recurrences before the task was anchored
+    if interval == "weekly":
+        return ad.weekday() == d.weekday()
+    if interval == "monthly":
+        return ad.day == d.day
+    return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CHAT TAB
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ChatTab(ctk.CTkFrame):
+    def __init__(self, master, root, on_notify, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self.root = root
+        self.on_notify = on_notify
+        self.history_msgs = []
+        self.active_agent = None
+        self.orch = None
+        self._streaming = False
+        self._pending_file = None
+        self._pending_screenshot = False
+        self._voice = None
+        self._build()
+        self._load_agents()
+
+    def _build(self):
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        # ── Left sidebar ───────────────────────────────────────────────────
+        left = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14, width=195)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        left.grid_propagate(False)
+        left.rowconfigure(2, weight=1)
+
+        ctk.CTkLabel(left, text="AGENTS", font=("Segoe UI Semibold", 10),
+                     text_color=MUTED).grid(row=0, column=0, sticky="w", padx=14, pady=(14, 4))
+        self.agent_frame = ctk.CTkScrollableFrame(left, fg_color="transparent", height=280)
+        self.agent_frame.grid(row=1, column=0, sticky="nsew", padx=6)
+
+        ctk.CTkFrame(left, fg_color=BORDER, height=1).grid(row=2, column=0, sticky="ew", padx=10, pady=6)
+
+        ctk.CTkLabel(left, text="HISTORY", font=("Segoe UI Semibold", 10),
+                     text_color=MUTED).grid(row=3, column=0, sticky="w", padx=14, pady=(4, 4))
+        self.history_frame = ctk.CTkScrollableFrame(left, fg_color="transparent")
+        self.history_frame.grid(row=4, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        left.rowconfigure(4, weight=1)
+        self._refresh_history()
+
+        # ── Right: chat ────────────────────────────────────────────────────
+        right = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(1, weight=1)
+
+        # Header bar
+        hdr = ctk.CTkFrame(right, fg_color=SURF2, corner_radius=10, height=52)
+        hdr.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 0))
+        hdr.grid_propagate(False)
+        hdr.columnconfigure(1, weight=1)
+
+        self.agent_icon_lbl = ctk.CTkLabel(hdr, text="✦", font=("Segoe UI", 22), text_color=ACCENT, width=40)
+        self.agent_icon_lbl.grid(row=0, column=0, padx=(12, 0), pady=8)
+        info = ctk.CTkFrame(hdr, fg_color="transparent")
+        info.grid(row=0, column=1, sticky="w", padx=8)
+        self.agent_name_lbl = ctk.CTkLabel(info, text="Select an agent", font=F_BOLD, text_color=TEXT)
+        self.agent_name_lbl.pack(anchor="w")
+        self.agent_sub_lbl = ctk.CTkLabel(info, text="", font=F_SMALL, text_color=MUTED)
+        self.agent_sub_lbl.pack(anchor="w")
+
+        hdr_btns = ctk.CTkFrame(hdr, fg_color="transparent")
+        hdr_btns.grid(row=0, column=2, padx=10)
+        for txt, cmd in [("📷", self._attach_screenshot), ("📁", self._attach_file),
+                         ("🎤", self._toggle_voice), ("📋", self._copy_chat),
+                         ("⬇", self._export_chat), ("↩", self._save_and_clear)]:
+            ctk.CTkButton(hdr_btns, text=txt, width=34, height=30,
+                          fg_color=SURF2, border_color=BORDER, border_width=1,
+                          hover_color=SURF3, text_color=TEXT, font=F_SMALL,
+                          command=cmd).pack(side="left", padx=2)
+
+        # Messages
+        self.msg_box = ctk.CTkTextbox(right, font=F_BODY, wrap="word",
+                                       fg_color=SURFACE, text_color=TEXT,
+                                       border_width=0, state="disabled")
+        self.msg_box.grid(row=1, column=0, sticky="nsew", padx=12, pady=8)
+
+        # Tool activity strip
+        self.tool_bar = ctk.CTkFrame(right, fg_color=SURF2, corner_radius=8, height=26)
+        self.tool_bar.grid(row=2, column=0, sticky="ew", padx=12)
+        self.tool_bar.grid_remove()
+        self.tool_lbl = ctk.CTkLabel(self.tool_bar, text="", font=F_SMALL, text_color=ACCENT)
+        self.tool_lbl.pack(side="left", padx=10)
+
+        # Voice indicator
+        self.voice_bar = ctk.CTkFrame(right, fg_color=tint(DANGER, 0x33), corner_radius=8, height=26)
+        self.voice_bar.grid(row=3, column=0, sticky="ew", padx=12)
+        self.voice_bar.grid_remove()
+        ctk.CTkLabel(self.voice_bar, text="🎤 Listening… speak now, then click 🎤 again to stop",
+                     font=F_SMALL, text_color=DANGER).pack(side="left", padx=10)
+
+        # Input
+        inp_frame = ctk.CTkFrame(right, fg_color=SURF2, corner_radius=12)
+        inp_frame.grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 12))
+        inp_frame.columnconfigure(0, weight=1)
+        self.input_box = ctk.CTkTextbox(inp_frame, height=76, font=F_BODY, wrap="word",
+                                         fg_color="transparent", text_color=TEXT, border_width=0)
+        self.input_box.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
+        self.input_box.bind("<Return>", self._on_enter)
+
+        bot = ctk.CTkFrame(inp_frame, fg_color="transparent")
+        bot.grid(row=1, column=0, sticky="ew", padx=10, pady=(2, 8))
+        ctk.CTkLabel(bot, text="Enter to send · Shift+Enter for new line",
+                     font=F_SMALL, text_color=MUTED).pack(side="left")
+        self.regen_btn = ctk.CTkButton(bot, text="↻ Regenerate", width=110, height=28,
+                                       fg_color=SURF3, hover_color=BORDER,
+                                       text_color=MUTED, font=F_SMALL, command=self._regenerate)
+        self.regen_btn.pack(side="left", padx=8)
+        self.stop_btn = ctk.CTkButton(bot, text="⏹ Stop", width=80, height=28,
+                                       fg_color=tint(DANGER, 0x33), hover_color=tint(DANGER, 0x55),
+                                       text_color=DANGER, border_color=DANGER, border_width=1,
+                                       font=F_SMALL, command=self._stop_agent)
+        self.send_btn = ctk.CTkButton(bot, text="Send →", width=90, height=28,
+                                       fg_color=ACCENT, hover_color="#8aa5ff",
+                                       text_color="white", font=F_BOLD, command=self._send)
+        self.send_btn.pack(side="right")
+
+        # Clipboard offer banner (hidden by default)
+        self.clip_bar = ctk.CTkFrame(right, fg_color=tint(PURPLE, 0x22), corner_radius=8, height=36)
+        self.clip_bar.grid(row=5, column=0, sticky="ew", padx=12, pady=(0, 4))
+        self.clip_bar.grid_remove()
+        self.clip_lbl = ctk.CTkLabel(self.clip_bar, text="", font=F_SMALL, text_color=PURPLE)
+        self.clip_lbl.pack(side="left", padx=10)
+        ctk.CTkButton(self.clip_bar, text="Summarize", width=90, height=24,
+                      fg_color=tint(PURPLE, 0x44), hover_color=tint(PURPLE, 0x66),
+                      text_color=PURPLE, font=F_SMALL,
+                      command=lambda: self._use_clipboard("Summarize this text")).pack(side="right", padx=4)
+        ctk.CTkButton(self.clip_bar, text="Improve", width=80, height=24,
+                      fg_color=SURF2, hover_color=SURF3,
+                      text_color=MUTED, font=F_SMALL,
+                      command=lambda: self._use_clipboard("Improve and rewrite this text")).pack(side="right", padx=2)
+        ctk.CTkButton(self.clip_bar, text="✕", width=24, height=24,
+                      fg_color="transparent", hover_color=SURF2,
+                      text_color=MUTED, font=F_SMALL,
+                      command=self.clip_bar.grid_remove).pack(side="right")
+        self._clipboard_text = ""
+
+    # ── Agent management ───────────────────────────────────────────────────
+
+    def _load_agents(self):
+        for w in self.agent_frame.winfo_children():
+            w.destroy()
+        agents = cfg.get("agents", [])
+        for agent in agents:
+            color = AGENT_COLORS.get(agent["id"], ACCENT)
+            ctk.CTkButton(
+                self.agent_frame,
+                text=f"{agent['icon']}  {agent['name']}",
+                anchor="w", height=40,
+                fg_color="transparent", hover_color=SURF2,
+                text_color=TEXT, font=F_BODY, corner_radius=8,
+                command=lambda a=agent: self._select_agent(a),
+            ).pack(fill="x", pady=1)
+        if agents:
+            self._select_agent(agents[0])
+
+    def _select_agent(self, agent):
+        self.active_agent = agent
+        color = AGENT_COLORS.get(agent["id"], ACCENT)
+        self.agent_icon_lbl.configure(text=agent["icon"], text_color=color)
+        self.agent_name_lbl.configure(text=agent["name"])
+        self.agent_sub_lbl.configure(text=agent.get("desc", ""))
+
+    def reload_agents(self):
+        self._load_agents()
+
+    # ── History ────────────────────────────────────────────────────────────
+
+    def _refresh_history(self):
+        for w in self.history_frame.winfo_children():
+            w.destroy()
+        convos = hist.list_conversations(limit=30)
+        if not convos:
+            ctk.CTkLabel(self.history_frame, text="No history yet", font=F_SMALL,
+                         text_color=MUTED).pack(pady=8)
+            return
+        for c in convos:
+            ts = c["timestamp"][:10] if c["timestamp"] else ""
+            frame = ctk.CTkFrame(self.history_frame, fg_color="transparent", cursor="hand2")
+            frame.pack(fill="x", pady=1)
+            ctk.CTkButton(
+                frame, text=c["title"][:28], anchor="w", height=34,
+                fg_color="transparent", hover_color=SURF2,
+                text_color=MUTED, font=F_SMALL, corner_radius=6,
+                command=lambda fn=c["filename"]: self._load_history(fn),
+            ).pack(fill="x")
+
+    def _load_history(self, filename: str):
+        data = hist.load_conversation(filename)
+        if not data:
+            return
+        self.history_msgs = data.get("messages", [])
+        agent_id = data.get("agent_id", "assistant")
+        agents = cfg.get("agents", [])
+        agent = next((a for a in agents if a["id"] == agent_id), agents[0] if agents else None)
+        if agent:
+            self._select_agent(agent)
+        # Replay messages in UI
+        self.msg_box.configure(state="normal")
+        self.msg_box.delete("1.0", "end")
+        self.msg_box.configure(state="disabled")
+        for m in self.history_msgs:
+            if m["role"] == "user":
+                self._append_msg("user", m["content"] if isinstance(m["content"], str) else str(m["content"]))
+            elif m["role"] == "assistant":
+                self._append_msg("assistant", m["content"] if isinstance(m["content"], str) else str(m["content"]))
+
+    def _save_and_clear(self):
+        if self.history_msgs:
+            hist.save_conversation(self.history_msgs, self.active_agent["id"] if self.active_agent else "assistant")
+            self._refresh_history()
+        self.history_msgs = []
+        self.msg_box.configure(state="normal")
+        self.msg_box.delete("1.0", "end")
+        self.msg_box.configure(state="disabled")
+
+    # ── Export ─────────────────────────────────────────────────────────────
+
+    def _conversation_markdown(self):
+        """Render the current conversation as Markdown text."""
+        agent_name = (self.active_agent or {}).get("name", "ARIA")
+        lines = [f"# ARIA conversation — {agent_name}",
+                 f"_Exported {datetime.now().strftime('%Y-%m-%d %H:%M')}_", ""]
+        for msg in self.history_msgs:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                parts = []
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_use":
+                            parts.append(f"_[tool: {block.get('name', '')}]_")
+                    else:
+                        parts.append(str(block))
+                content = "\n".join(parts)
+            who = "You" if role == "user" else agent_name
+            lines.append(f"**{who}:**\n\n{content}\n")
+        return "\n".join(lines)
+
+    def _export_chat(self):
+        """Save the current conversation to a Markdown file."""
+        if not self.history_msgs:
+            messagebox.showinfo("Nothing to export", "Start a conversation first.")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".md",
+            filetypes=[("Markdown", "*.md"), ("Text", "*.txt")],
+            initialfile=f"aria-chat-{datetime.now().strftime('%Y%m%d-%H%M')}.md")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self._conversation_markdown())
+            self.on_notify("Exported", "Conversation saved.")
+        except Exception as e:
+            messagebox.showerror("Export failed", str(e))
+
+    def _copy_chat(self):
+        """Copy the whole conversation to the clipboard as Markdown."""
+        if not self.history_msgs:
+            messagebox.showinfo("Nothing to copy", "Start a conversation first.")
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(self._conversation_markdown())
+            self.on_notify("Copied", "Conversation copied to clipboard.")
+        except Exception as e:
+            messagebox.showerror("Copy failed", str(e))
+
+    # ── Clipboard ──────────────────────────────────────────────────────────
+
+    def on_clipboard(self, text: str):
+        """Called by ClipboardWatcher when something meaningful is copied."""
+        self._clipboard_text = text
+        preview = text[:55] + "…" if len(text) > 55 else text
+        on_main(self.root, lambda: self._show_clipboard_offer(preview))
+
+    def _show_clipboard_offer(self, preview: str):
+        self.clip_lbl.configure(text=f"📋 {preview}")
+        self.clip_bar.grid()
+
+    def _use_clipboard(self, action: str):
+        if not self._clipboard_text:
+            return
+        self.clip_bar.grid_remove()
+        self.input_box.delete("1.0", "end")
+        self.input_box.insert("end", f"{action}:\n\n{self._clipboard_text}")
+        self._send()
+
+    # ── Voice ──────────────────────────────────────────────────────────────
+
+    def _toggle_voice(self):
+        if self._voice and self._voice.is_recording:
+            self._voice.stop_recording()
+            self.voice_bar.grid_remove()
+            return
+        available, mode = VoiceRecorder.is_available()
+        if not available:
+            messagebox.showinfo("Voice Input", "Install voice support:\npip install SpeechRecognition pyaudio\n\nOr for local/offline:\npip install faster-whisper sounddevice")
+            return
+        self._voice = VoiceRecorder(
+            on_result=lambda t: on_main(self.root, lambda t=t: self._on_voice_result(t)),
+            on_error=lambda e: on_main(self.root, lambda e=e: self._on_voice_error(e)),
+        )
+        self._voice.start_recording(mode)
+        self.voice_bar.grid()
+
+    def _on_voice_result(self, text: str):
+        self.voice_bar.grid_remove()
+        self.input_box.delete("1.0", "end")
+        self.input_box.insert("end", text)
+        self._send()
+
+    def _on_voice_error(self, err: str):
+        self.voice_bar.grid_remove()
+        self._append_msg("error", f"Voice error: {err}")
+
+    # ── Send & agent loop ──────────────────────────────────────────────────
+
+    def _on_enter(self, event):
+        if event.state & 1:
+            return
+        self._send()
+        return "break"
+
+    def _send(self):
+        text = self.input_box.get("1.0", "end").strip()
+        if not text or not self.active_agent:
+            return
+        self.input_box.delete("1.0", "end")
+
+        content = text
+        if self._pending_file:
+            content = f"{text}\n\n[Attached file:]\n{self._pending_file}"
+            self._pending_file = None
+
+        self.history_msgs.append({"role": "user", "content": content})
+        self._append_msg("user", text)
+        self._run_agent()
+
+    def _regenerate(self):
+        """Re-run the agent on the last user turn, discarding the last reply.
+        Useful when a response was cut off or you want a different answer."""
+        if self._streaming or not self.active_agent:
+            return
+        # Drop a trailing assistant message so the last turn is the user's.
+        if self.history_msgs and self.history_msgs[-1].get("role") == "assistant":
+            self.history_msgs.pop()
+        if not any(m.get("role") == "user" for m in self.history_msgs):
+            messagebox.showinfo("Nothing to regenerate", "Send a message first.")
+            return
+        # Redraw the transcript without the removed reply.
+        self.msg_box.configure(state="normal")
+        self.msg_box.delete("1.0", "end")
+        self.msg_box.configure(state="disabled")
+        for m in self.history_msgs:
+            txt = m["content"] if isinstance(m["content"], str) else str(m["content"])
+            self._append_msg(m["role"], txt)
+        self._run_agent()
+
+    def _run_agent(self):
+        """Start the agent on the current history. Shared by send/regenerate."""
+        self._set_busy(True)
+        agent = self.active_agent
+        use_computer = agent["id"] == "computer" or cfg.get("computer_use_enabled", False)
+        use_browser = cfg.get("browser_enabled", True)
+
+        self.orch = run_agent_in_thread(
+            messages=list(self.history_msgs),
+            system_prompt=agent["system"],
+            on_token=lambda t: on_main(self.root, lambda t=t: self._on_token(t)),
+            on_tool_call=lambda n, i: on_main(self.root, lambda n=n, i=i: self._on_tool_call(n, i)),
+            on_tool_result=lambda n, r: on_main(self.root, lambda n=n, r=r: self._on_tool_result(n, r)),
+            on_done=lambda t: on_main(self.root, lambda t=t: self._on_done(t)),
+            on_error=lambda e: on_main(self.root, lambda e=e: self._on_error(e)),
+            use_computer_tools=use_computer,
+            use_browser_tools=use_browser,
+            include_screenshot=self._pending_screenshot,
+        )
+        self._pending_screenshot = False
+
+    def _on_token(self, token):
+        if not self._streaming:
+            self._streaming = True
+            agent_name = self.active_agent["name"] if self.active_agent else "ARIA"
+            color = AGENT_COLORS.get(self.active_agent["id"] if self.active_agent else "assistant", SUCCESS)
+            self.msg_box.configure(state="normal")
+            self.msg_box.insert("end", f"\n\n{agent_name}\n", "ai_label")
+            self.msg_box.tag_config("ai_label", foreground=color, font=F_BOLD)
+            self.msg_box.configure(state="disabled")
+        self.msg_box.configure(state="normal")
+        self.msg_box.insert("end", token)
+        self.msg_box.configure(state="disabled")
+        self.msg_box.see("end")
+
+    def _on_tool_call(self, name, inp):
+        friendly = name.replace("_", " ").title()
+        self.tool_bar.grid()
+        self.tool_lbl.configure(text=f"⚙  {friendly}…")
+
+    def _on_tool_result(self, name, result):
+        if cfg.get("show_agent_thinking", True):
+            short = str(result)[:110] + ("…" if len(str(result)) > 110 else "")
+            self._append_msg("tool", f"[{name.replace('_',' ')}] {short}")
+
+    def _on_done(self, text):
+        if self._streaming:
+            self.history_msgs.append({"role": "assistant", "content": text})
+            self._streaming = False
+        self.tool_bar.grid_remove()
+        self._set_busy(False)
+        # Auto-save if enabled
+        if cfg.get("auto_save_chats", True) and len(self.history_msgs) >= 2:
+            threading.Thread(target=lambda: hist.save_conversation(
+                self.history_msgs,
+                self.active_agent["id"] if self.active_agent else "assistant"
+            ), daemon=True).start()
+        self.on_notify("ARIA", "Response ready")
+
+    def _on_error(self, err):
+        self._streaming = False
+        self._append_msg("error", err)
+        self.tool_bar.grid_remove()
+        self._set_busy(False)
+
+    def _set_busy(self, busy):
+        if busy:
+            self.send_btn.pack_forget()
+            self.stop_btn.pack(side="right")
+        else:
+            self.stop_btn.pack_forget()
+            self.send_btn.pack(side="right")
+        # Can't regenerate while a response is streaming.
+        self.regen_btn.configure(state="disabled" if busy else "normal")
+
+    def _stop_agent(self):
+        if self.orch:
+            self.orch.stop()
+        self._streaming = False
+        self._set_busy(False)
+        self.tool_bar.grid_remove()
+
+    def _append_msg(self, role, text):
+        if not isinstance(text, str):
+            text = str(text)
+        self.msg_box.configure(state="normal")
+        if role == "user":
+            self.msg_box.insert("end", "\n\nYou\n", "user_label")
+            self.msg_box.insert("end", text + "\n")
+            self.msg_box.tag_config("user_label", foreground=ACCENT, font=F_BOLD)
+        elif role == "assistant":
+            agent_name = self.active_agent["name"] if self.active_agent else "ARIA"
+            color = AGENT_COLORS.get(self.active_agent["id"] if self.active_agent else "assistant", SUCCESS)
+            self.msg_box.insert("end", f"\n\n{agent_name}\n", "ai_lbl2")
+            self.msg_box.insert("end", text + "\n")
+            self.msg_box.tag_config("ai_lbl2", foreground=color, font=F_BOLD)
+        elif role == "tool":
+            self.msg_box.insert("end", f"\n  ⚙ {text}\n", "tool_t")
+            self.msg_box.tag_config("tool_t", foreground=MUTED, font=F_SMALL)
+        elif role == "error":
+            self.msg_box.insert("end", f"\n  ⚠ {text}\n", "err_t")
+            self.msg_box.tag_config("err_t", foreground=DANGER, font=F_SMALL)
+        self.msg_box.configure(state="disabled")
+        self.msg_box.see("end")
+
+    def _attach_file(self):
+        path = filedialog.askopenfilename(
+            title="Attach file",
+            filetypes=[("Supported", "*.txt *.md *.py *.js *.json *.csv *.docx *.xlsx"), ("All", "*.*")]
+        )
+        if not path:
+            return
+        from agent.file_tools import read_file
+        r = read_file(path)
+        if "error" in r:
+            messagebox.showerror("Error", r["error"])
+            return
+        self._pending_file = r.get("content", "")
+        self._append_msg("tool", f"📎 Attached: {Path(path).name}")
+
+    def _attach_screenshot(self):
+        self._pending_screenshot = True
+        self._append_msg("tool", "📷 Screenshot will be sent with your next message.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TASKS TAB
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TasksTab(ctk.CTkFrame):
+    def __init__(self, master, root, scheduler, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self.root = root
+        self.scheduler = scheduler
+        self._running = set()
+        self._build()
+        self._refresh()
+
+    def _build(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        top = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14, height=58)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        top.grid_propagate(False)
+        ctk.CTkLabel(top, text="Tasks", font=F_TITLE, text_color=TEXT).pack(side="left", padx=18)
+        ctk.CTkLabel(top, text="One-time and recurring automated jobs",
+                     font=F_SMALL, text_color=MUTED).pack(side="left")
+        ctk.CTkButton(top, text="+ New Task", width=110, height=34,
+                      fg_color=ACCENT, hover_color="#8aa5ff", text_color="white",
+                      font=F_BOLD, command=self._create).pack(side="right", padx=14)
+        self.search_var = ctk.StringVar()
+        self.search_var.trace_add("write", lambda *a: self._refresh())
+        ctk.CTkEntry(top, textvariable=self.search_var, placeholder_text="Search tasks…",
+                     width=180, height=34, font=F_SMALL).pack(side="right", padx=(0, 8))
+
+        split = ctk.CTkFrame(self, fg_color="transparent")
+        split.grid(row=1, column=0, sticky="nsew")
+        split.columnconfigure(0, weight=1)
+        split.rowconfigure(0, weight=1)
+
+        self.task_list = ctk.CTkScrollableFrame(split, fg_color=SURFACE, corner_radius=14)
+        self.task_list.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+
+        # Result panel
+        self.result_panel = ctk.CTkFrame(split, fg_color=SURFACE, corner_radius=14, width=340)
+        self.result_panel.grid(row=0, column=1, sticky="nsew")
+        self.result_panel.grid_propagate(False)
+        self.result_panel.grid_remove()
+        self._r_title = ctk.CTkLabel(self.result_panel, text="", font=F_HEAD, text_color=TEXT, wraplength=300)
+        self._r_title.pack(anchor="w", padx=14, pady=(14, 2))
+        self._r_ts = ctk.CTkLabel(self.result_panel, text="", font=F_SMALL, text_color=MUTED)
+        self._r_ts.pack(anchor="w", padx=14)
+        ctk.CTkFrame(self.result_panel, fg_color=BORDER, height=1).pack(fill="x", padx=14, pady=8)
+        self._r_text = ctk.CTkTextbox(self.result_panel, fg_color="transparent", text_color=TEXT,
+                                       font=F_BODY, border_width=0, wrap="word")
+        self._r_text.pack(fill="both", expand=True, padx=10, pady=4)
+        ctk.CTkButton(self.result_panel, text="Close", width=80, height=28,
+                      fg_color=SURF2, hover_color=BORDER, text_color=MUTED,
+                      font=F_SMALL, command=self.result_panel.grid_remove).pack(anchor="e", padx=14, pady=(0, 12))
+
+    def _refresh(self):
+        for w in self.task_list.winfo_children():
+            w.destroy()
+        tasks = cfg.get("tasks", [])
+        query = self.search_var.get().strip().lower() if hasattr(self, "search_var") else ""
+        if query:
+            tasks = [t for t in tasks
+                     if query in t.get("name", "").lower()
+                     or query in t.get("prompt", "").lower()]
+        if not tasks:
+            msg = "No tasks match your search." if query else "No tasks yet. Create one →"
+            ctk.CTkLabel(self.task_list, text=msg,
+                         font=F_BODY, text_color=MUTED).pack(pady=40)
+            return
+        for task in tasks:
+            self._row(task)
+
+    def _row(self, task):
+        agents_list = cfg.get("agents", [])
+        agent = next((a for a in agents_list if a["id"] == task.get("agent", "assistant")),
+                     {"icon": "✦", "id": "assistant"})
+        color = AGENT_COLORS.get(agent["id"], ACCENT)
+        running = task["id"] in self._running
+
+        row = ctk.CTkFrame(self.task_list, fg_color=SURF2, corner_radius=12)
+        row.pack(fill="x", padx=8, pady=4)
+        row.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(row, text=agent["icon"], font=("Segoe UI", 22), text_color=color, width=44
+                     ).grid(row=0, column=0, rowspan=2, padx=(12, 0), pady=10)
+
+        name_f = ctk.CTkFrame(row, fg_color="transparent")
+        name_f.grid(row=0, column=1, sticky="w", padx=10, pady=(10, 0))
+        ctk.CTkLabel(name_f, text=task["name"], font=F_BOLD, text_color=TEXT).pack(side="left")
+        interval = task.get("interval", "none")
+        if interval != "none":
+            ctk.CTkLabel(name_f, text=f"  ↻ {interval}", font=F_SMALL, text_color=WARNING).pack(side="left", padx=4)
+        if running:
+            ctk.CTkLabel(name_f, text=" ⚙ running", font=F_SMALL, text_color=ACCENT).pack(side="left")
+
+        preview = task.get("prompt", "")[:85] + ("…" if len(task.get("prompt","")) > 85 else "")
+        ctk.CTkLabel(row, text=preview, font=F_SMALL, text_color=MUTED, anchor="w"
+                     ).grid(row=1, column=1, sticky="w", padx=10, pady=(0, 8))
+
+        btns = ctk.CTkFrame(row, fg_color="transparent")
+        btns.grid(row=0, column=2, rowspan=2, padx=10, pady=8)
+
+        if task.get("last_result"):
+            ctk.CTkButton(btns, text="View", width=60, height=26,
+                          fg_color=SURF2, border_color=BORDER, border_width=1,
+                          hover_color=BORDER, text_color=MUTED, font=F_SMALL,
+                          command=lambda t=task: self._view(t)).pack(pady=2)
+
+        ctk.CTkButton(btns,
+                      text="⏳" if running else "▶ Run",
+                      width=78, height=26,
+                      fg_color=tint(SUCCESS, 0x22), hover_color=tint(SUCCESS, 0x44),
+                      text_color=SUCCESS, border_color=tint(SUCCESS, 0x88), border_width=1,
+                      font=F_SMALL, state="disabled" if running else "normal",
+                      command=lambda t=task: self._run(t)).pack(pady=2)
+
+        ctk.CTkButton(btns, text="✕", width=30, height=26,
+                      fg_color=tint(DANGER, 0x22), hover_color=tint(DANGER, 0x44),
+                      text_color=DANGER, border_color=tint(DANGER, 0x88), border_width=1,
+                      font=F_SMALL, command=lambda t=task: self._delete(t)).pack(pady=2)
+
+    def _view(self, task):
+        self.result_panel.grid()
+        self._r_title.configure(text=task["name"])
+        self._r_ts.configure(text=f"Last run: {task.get('last_run','Never')}")
+        self._r_text.configure(state="normal")
+        self._r_text.delete("1.0", "end")
+        self._r_text.insert("end", task.get("last_result", "No result."))
+        self._r_text.configure(state="disabled")
+
+    def _run(self, task):
+        self._running.add(task["id"])
+        self._refresh()
+        self.scheduler.run_task_now(task)
+
+    def _delete(self, task):
+        if not messagebox.askyesno("Delete", f"Delete '{task['name']}'?"):
+            return
+        tasks = [t for t in cfg.get("tasks", []) if t["id"] != task["id"]]
+        cfg.set_key("tasks", tasks)
+        self._refresh()
+
+    def _create(self):
+        TaskDialog(self.root, on_save=self._on_saved)
+
+    def _on_saved(self, data):
+        tasks = cfg.get("tasks", [])
+        tasks.append(data)
+        cfg.set_key("tasks", tasks)
+        self.scheduler.reload()
+        self._refresh()
+
+    def on_task_done(self, task_id, name, result):
+        self._running.discard(task_id)
+        on_main(self.root, self._refresh)
+
+
+class TaskDialog(ctk.CTkToplevel):
+    def __init__(self, master, on_save, preset_date=None):
+        super().__init__(master)
+        self.on_save = on_save
+        # When opened from the calendar, default to a one-off task on that date.
+        self.preset_date = preset_date
+        self.title("New Task")
+        self.geometry("520x600")
+        self.resizable(False, False)
+        self.configure(fg_color=SURFACE)
+        self.grab_set()
+        self._build()
+
+    def _build(self):
+        ctk.CTkLabel(self, text="New Task", font=F_HEAD, text_color=TEXT).pack(anchor="w", padx=20, pady=(18, 4))
+        ctk.CTkLabel(self, text="Tasks can run on a schedule automatically.",
+                     font=F_SMALL, text_color=MUTED).pack(anchor="w", padx=20, pady=(0, 14))
+
+        ctk.CTkLabel(self, text="Task name", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20)
+        self.name_var = ctk.StringVar()
+        ctk.CTkEntry(self, textvariable=self.name_var, placeholder_text="e.g. Morning briefing",
+                     height=38, font=F_BODY).pack(fill="x", padx=20, pady=(4, 14))
+
+        ctk.CTkLabel(self, text="What should ARIA do?", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20)
+        self.prompt_box = ctk.CTkTextbox(self, height=100, font=F_BODY, fg_color=SURF2,
+                                          text_color=TEXT, border_width=0)
+        self.prompt_box.pack(fill="x", padx=20, pady=(4, 14))
+
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(0, 12))
+        row.columnconfigure((0, 1), weight=1)
+
+        ctk.CTkLabel(row, text="Schedule", font=F_BOLD, text_color=TEXT).grid(row=0, column=0, sticky="w")
+        self.interval_var = ctk.StringVar(value="once" if self.preset_date else "none")
+        ctk.CTkComboBox(row, variable=self.interval_var, height=36, font=F_BODY,
+                        values=["none","once","hourly","daily","weekly","monthly"],
+                        command=self._on_interval, dropdown_fg_color=SURF2
+                        ).grid(row=1, column=0, sticky="ew", padx=(0, 8))
+
+        ctk.CTkLabel(row, text="Agent", font=F_BOLD, text_color=TEXT).grid(row=0, column=1, sticky="w")
+        agents = cfg.get("agents", [])
+        names = [a["name"] for a in agents]
+        self.agent_var = ctk.StringVar(value=names[0] if names else "Assistant")
+        ctk.CTkComboBox(row, variable=self.agent_var, height=36, font=F_BODY,
+                        values=names, dropdown_fg_color=SURF2).grid(row=1, column=1, sticky="ew")
+
+        # Date + time row. Date anchors 'once' (exact day), 'weekly' (weekday)
+        # and 'monthly' (day-of-month) tasks; time sets when they run.
+        dt_row = ctk.CTkFrame(self, fg_color="transparent")
+        dt_row.pack(fill="x", padx=20, pady=(0, 12))
+        dt_row.columnconfigure((0, 1), weight=1)
+
+        ctk.CTkLabel(dt_row, text="Date (YYYY-MM-DD)", font=F_BOLD, text_color=TEXT).grid(row=0, column=0, sticky="w")
+        default_date = self.preset_date or date.today().strftime("%Y-%m-%d")
+        self.date_var = ctk.StringVar(value=default_date)
+        self._date_entry = ctk.CTkEntry(dt_row, textvariable=self.date_var, height=36, font=F_BODY)
+        self._date_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+
+        ctk.CTkLabel(dt_row, text="Time (HH:MM)", font=F_BOLD, text_color=TEXT).grid(row=0, column=1, sticky="w")
+        self.time_var = ctk.StringVar(value="09:00")
+        ctk.CTkEntry(dt_row, textvariable=self.time_var, height=36, font=F_BODY
+                     ).grid(row=1, column=1, sticky="ew")
+
+        self._hint = ctk.CTkLabel(self, text="", font=F_SMALL, text_color=MUTED, anchor="w", justify="left")
+        self._hint.pack(fill="x", padx=20, pady=(0, 8))
+
+        ctk.CTkButton(self, text="Create Task", height=42, fg_color=ACCENT,
+                      hover_color="#8aa5ff", text_color="white", font=F_BOLD,
+                      command=self._save).pack(fill="x", padx=20, pady=(0, 6))
+        ctk.CTkButton(self, text="Cancel", height=36, fg_color=SURF2,
+                      hover_color=BORDER, text_color=MUTED, font=F_BODY,
+                      command=self.destroy).pack(fill="x", padx=20, pady=(0, 16))
+
+        self._on_interval(self.interval_var.get())
+
+    def _on_interval(self, value):
+        """Show which schedule was picked and enable the date field when used."""
+        hints = {
+            "none":    "Runs only when you click ▶ Run. No schedule.",
+            "once":    "Runs once on the date and time below, then disables itself.",
+            "hourly":  "Runs every hour while ARIA is open. Date/time ignored.",
+            "daily":   "Runs every day at the time below.",
+            "weekly":  "Runs weekly on the weekday of the date below, at that time.",
+            "monthly": "Runs monthly on the day-of-month of the date below, at that time.",
+        }
+        self._hint.configure(text=hints.get(value, ""))
+        needs_date = value in ("once", "weekly", "monthly")
+        self._date_entry.configure(state="normal" if needs_date else "disabled")
+
+    def _save(self):
+        name = self.name_var.get().strip()
+        prompt = self.prompt_box.get("1.0", "end").strip()
+        if not name or not prompt:
+            messagebox.showwarning("Missing info", "Please fill in both fields.")
+            return
+        interval = self.interval_var.get()
+        run_date = self.date_var.get().strip()
+        run_at = self.time_var.get().strip() or "09:00"
+
+        if interval in ("once", "weekly", "monthly"):
+            try:
+                datetime.strptime(run_date, "%Y-%m-%d")
+            except ValueError:
+                messagebox.showwarning("Invalid date", "Please enter the date as YYYY-MM-DD.")
+                return
+        if interval in ("once", "daily", "weekly", "monthly"):
+            try:
+                datetime.strptime(run_at, "%H:%M")
+            except ValueError:
+                messagebox.showwarning("Invalid time", "Please enter the time as HH:MM (24-hour).")
+                return
+
+        agents = cfg.get("agents", [])
+        agent = next((a for a in agents if a["name"] == self.agent_var.get()), agents[0] if agents else {"id": "assistant"})
+        self.on_save({
+            "id": str(uuid.uuid4()),
+            "name": name, "prompt": prompt,
+            "interval": interval,
+            "run_date": run_date, "run_at": run_at,
+            "agent": agent["id"], "enabled": True,
+            "last_run": None, "last_result": None, "status": "idle",
+        })
+        self.destroy()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CALENDAR TAB
+# ══════════════════════════════════════════════════════════════════════════════
+
+class CalendarTab(ctk.CTkFrame):
+    """Month grid showing which days have scheduled tasks. Click a day to see
+    its tasks and add a new one anchored to that date."""
+
+    WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    def __init__(self, master, root, scheduler, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self.root = root
+        self.scheduler = scheduler
+        today = date.today()
+        self._year = today.year
+        self._month = today.month
+        self._selected = today
+        self._day_cells = {}  # date -> frame, for highlight refresh
+        self._build()
+        self.refresh()
+
+    def _build(self):
+        self.columnconfigure(0, weight=3)
+        self.columnconfigure(1, weight=2)
+        self.rowconfigure(1, weight=1)
+
+        # ── Header with month nav ───────────────────────────────────────────
+        top = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14, height=58)
+        top.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        top.grid_propagate(False)
+        ctk.CTkLabel(top, text="Calendar", font=F_TITLE, text_color=TEXT).pack(side="left", padx=18)
+        ctk.CTkLabel(top, text="See recurring tasks and schedule by date",
+                     font=F_SMALL, text_color=MUTED).pack(side="left")
+
+        nav = ctk.CTkFrame(top, fg_color="transparent")
+        nav.pack(side="right", padx=14)
+        ctk.CTkButton(nav, text="‹", width=34, height=32, fg_color=SURF2,
+                      hover_color=BORDER, text_color=TEXT, font=F_HEAD,
+                      command=lambda: self._shift_month(-1)).pack(side="left", padx=2)
+        self.month_lbl = ctk.CTkLabel(nav, text="", font=F_BOLD, text_color=TEXT, width=150)
+        self.month_lbl.pack(side="left", padx=6)
+        ctk.CTkButton(nav, text="›", width=34, height=32, fg_color=SURF2,
+                      hover_color=BORDER, text_color=TEXT, font=F_HEAD,
+                      command=lambda: self._shift_month(1)).pack(side="left", padx=2)
+        ctk.CTkButton(nav, text="Today", width=64, height=32,
+                      fg_color=tint(ACCENT, 0x33), hover_color=tint(ACCENT, 0x55),
+                      text_color=ACCENT, font=F_SMALL, command=self._go_today).pack(side="left", padx=(8, 0))
+
+        # ── Month grid ──────────────────────────────────────────────────────
+        self.grid_frame = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14)
+        self.grid_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+        for c in range(7):
+            self.grid_frame.columnconfigure(c, weight=1, uniform="day")
+        for r in range(1, 7):
+            self.grid_frame.rowconfigure(r, weight=1, uniform="week")
+
+        for c, wd in enumerate(self.WEEKDAYS):
+            ctk.CTkLabel(self.grid_frame, text=wd, font=("Segoe UI Semibold", 11),
+                         text_color=MUTED).grid(row=0, column=c, pady=(10, 4))
+
+        # ── Side panel: tasks on the selected day ───────────────────────────
+        self.side = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14)
+        self.side.grid(row=1, column=1, sticky="nsew")
+        self.side.columnconfigure(0, weight=1)
+        self.side.rowconfigure(1, weight=1)
+
+        self.side_title = ctk.CTkLabel(self.side, text="", font=F_HEAD, text_color=TEXT)
+        self.side_title.grid(row=0, column=0, sticky="w", padx=16, pady=(14, 6))
+
+        self.side_list = ctk.CTkScrollableFrame(self.side, fg_color="transparent")
+        self.side_list.grid(row=1, column=0, sticky="nsew", padx=8)
+
+        self.add_btn = ctk.CTkButton(self.side, text="+ Schedule on this day", height=38,
+                                     fg_color=ACCENT, hover_color="#8aa5ff", text_color="white",
+                                     font=F_BOLD, command=self._add_on_selected)
+        self.add_btn.grid(row=2, column=0, sticky="ew", padx=12, pady=12)
+
+    # ── Month navigation ────────────────────────────────────────────────────
+
+    def _shift_month(self, delta):
+        m = self._month + delta
+        y = self._year
+        while m < 1:
+            m += 12; y -= 1
+        while m > 12:
+            m -= 12; y += 1
+        self._month, self._year = m, y
+        self.refresh()
+
+    def _go_today(self):
+        today = date.today()
+        self._year, self._month, self._selected = today.year, today.month, today
+        self.refresh()
+
+    # ── Rendering ─────────────────────────────────────────────────────────────
+
+    def refresh(self):
+        """Redraw the month grid and the side panel from current settings."""
+        self.month_lbl.configure(text=f"{_calendar.month_name[self._month]} {self._year}")
+
+        # Clear previous day cells (keep weekday header row).
+        for cell in self._day_cells.values():
+            cell.destroy()
+        self._day_cells = {}
+
+        tasks = cfg.get("tasks", [])
+        today = date.today()
+        weeks = _calendar.Calendar(firstweekday=0).monthdatescalendar(self._year, self._month)
+        for r, week in enumerate(weeks, start=1):
+            for c, d in enumerate(week):
+                in_month = (d.month == self._month)
+                count = sum(1 for t in tasks if t.get("enabled", True) and task_occurs_on(t, d))
+                self._day_cells[d] = self._make_cell(r, c, d, in_month, d == today, count)
+
+        self._render_side()
+
+    def _make_cell(self, r, c, d, in_month, is_today, count):
+        selected = (d == self._selected)
+        if selected:
+            fg = tint(ACCENT, 0x44)
+        elif is_today:
+            fg = SURF3
+        else:
+            fg = SURF2 if in_month else SURFACE
+        cell = ctk.CTkFrame(self.grid_frame, fg_color=fg, corner_radius=8,
+                            border_width=1 if is_today else 0, border_color=ACCENT)
+        cell.grid(row=r, column=c, sticky="nsew", padx=3, pady=3)
+
+        day_color = TEXT if in_month else MUTED
+        ctk.CTkLabel(cell, text=str(d.day), font=F_SMALL,
+                     text_color=ACCENT if selected else day_color).pack(anchor="nw", padx=6, pady=(4, 0))
+        if count:
+            ctk.CTkLabel(cell, text=f"● {count}", font=("Segoe UI", 10),
+                         text_color=SUCCESS if not selected else "white").pack(anchor="w", padx=6)
+
+        # Whole cell is clickable.
+        for w in [cell] + list(cell.winfo_children()):
+            w.bind("<Button-1>", lambda e, dd=d: self._select(dd))
+        return cell
+
+    def _select(self, d):
+        self._selected = d
+        # Jump to that month if the clicked day spilled over from another month.
+        if d.month != self._month or d.year != self._year:
+            self._month, self._year = d.month, d.year
+        self.refresh()
+
+    def _render_side(self):
+        self.side_title.configure(text=self._selected.strftime("%A, %b %d"))
+        for w in self.side_list.winfo_children():
+            w.destroy()
+
+        tasks = [t for t in cfg.get("tasks", [])
+                 if t.get("enabled", True) and task_occurs_on(t, self._selected)]
+        if not tasks:
+            ctk.CTkLabel(self.side_list, text="No tasks scheduled.\nClick below to add one.",
+                         font=F_BODY, text_color=MUTED, justify="left").pack(anchor="w", padx=10, pady=20)
+            return
+
+        for task in tasks:
+            agent_id = task.get("agent", "assistant")
+            color = AGENT_COLORS.get(agent_id, ACCENT)
+            card = ctk.CTkFrame(self.side_list, fg_color=SURF2, corner_radius=10)
+            card.pack(fill="x", padx=6, pady=4)
+            head = ctk.CTkFrame(card, fg_color="transparent")
+            head.pack(fill="x", padx=10, pady=(8, 0))
+            ctk.CTkLabel(head, text=task.get("name", "Task"), font=F_BOLD, text_color=TEXT).pack(side="left")
+            interval = task.get("interval", "none")
+            badge = "once" if interval == "once" else f"↻ {interval}"
+            ctk.CTkLabel(head, text=badge, font=F_SMALL, text_color=color).pack(side="right")
+            meta = task.get("run_at", "")
+            ctk.CTkLabel(card, text=f"⏰ {meta}" if meta else "", font=F_SMALL,
+                         text_color=MUTED).pack(anchor="w", padx=10)
+            ctk.CTkButton(card, text="▶ Run now", height=26,
+                          fg_color=tint(SUCCESS, 0x22), hover_color=tint(SUCCESS, 0x44),
+                          text_color=SUCCESS, border_color=tint(SUCCESS, 0x88), border_width=1,
+                          font=F_SMALL, command=lambda t=task: self.scheduler.run_task_now(t)
+                          ).pack(anchor="e", padx=10, pady=(4, 10))
+
+    def _add_on_selected(self):
+        TaskDialog(self.root, on_save=self._on_saved,
+                   preset_date=self._selected.strftime("%Y-%m-%d"))
+
+    def _on_saved(self, data):
+        tasks = cfg.get("tasks", [])
+        tasks.append(data)
+        cfg.set_key("tasks", tasks)
+        self.scheduler.reload()
+        self.refresh()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MEMORY TAB
+# ══════════════════════════════════════════════════════════════════════════════
+
+class MemoryTab(ctk.CTkFrame):
+    def __init__(self, master, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self._build()
+        self._refresh()
+
+    def _build(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        top = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14, height=58)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        top.grid_propagate(False)
+        ctk.CTkLabel(top, text="Memory", font=F_TITLE, text_color=TEXT).pack(side="left", padx=18)
+        ctk.CTkLabel(top, text="Facts ARIA remembers about you",
+                     font=F_SMALL, text_color=MUTED).pack(side="left")
+        ctk.CTkButton(top, text="+ Add fact", width=100, height=34,
+                      fg_color=ACCENT, hover_color="#8aa5ff", text_color="white",
+                      font=F_BOLD, command=self._add_dialog).pack(side="right", padx=4)
+        ctk.CTkButton(top, text="Clear all", width=90, height=34,
+                      fg_color=tint(DANGER, 0x22), hover_color=tint(DANGER, 0x44),
+                      text_color=DANGER, border_color=tint(DANGER, 0x88), border_width=1,
+                      font=F_SMALL, command=self._clear_all).pack(side="right", padx=14)
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color=SURFACE, corner_radius=14)
+        self.scroll.grid(row=1, column=0, sticky="nsew")
+
+    def _refresh(self):
+        for w in self.scroll.winfo_children():
+            w.destroy()
+        data = mem.recall()
+        facts = data.get("all_facts", [])
+        if not facts:
+            ctk.CTkLabel(self.scroll, text="No memories yet. ARIA will store facts as you chat.",
+                         font=F_BODY, text_color=MUTED).pack(pady=40)
+            return
+        for fact in facts:
+            row = ctk.CTkFrame(self.scroll, fg_color=SURF2, corner_radius=10)
+            row.pack(fill="x", padx=8, pady=3)
+            row.columnconfigure(1, weight=1)
+            cat_color = {"preference": PURPLE, "work": ACCENT, "personal": WARNING, "task": SUCCESS}.get(fact.get("category","general"), MUTED)
+            ctk.CTkLabel(row, text=f"●", font=F_BOLD, text_color=cat_color, width=20
+                         ).grid(row=0, column=0, padx=(12, 0), pady=12)
+            ctk.CTkLabel(row, text=fact["key"], font=F_BOLD, text_color=TEXT, anchor="w"
+                         ).grid(row=0, column=1, sticky="w", padx=8, pady=(12, 0))
+            ctk.CTkLabel(row, text=fact["value"], font=F_BODY, text_color=MUTED, anchor="w", wraplength=500
+                         ).grid(row=1, column=1, sticky="w", padx=8, pady=(0, 10))
+            ctk.CTkButton(row, text="✕", width=28, height=28,
+                          fg_color="transparent", hover_color=tint(DANGER, 0x33),
+                          text_color=MUTED, font=F_SMALL,
+                          command=lambda k=fact["key"]: self._forget(k)
+                          ).grid(row=0, column=2, padx=10, pady=10)
+
+    def _forget(self, key):
+        mem.forget(key)
+        self._refresh()
+
+    def _clear_all(self):
+        if messagebox.askyesno("Clear memory", "Delete all memories? This cannot be undone."):
+            mem.clear_all_memory()
+            self._refresh()
+
+    def _add_dialog(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Add Memory")
+        dialog.geometry("400x280")
+        dialog.configure(fg_color=SURFACE)
+        dialog.grab_set()
+        ctk.CTkLabel(dialog, text="Key (short label)", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20, pady=(18, 2))
+        key_var = ctk.StringVar()
+        ctk.CTkEntry(dialog, textvariable=key_var, height=36, font=F_BODY).pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkLabel(dialog, text="Value", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20)
+        val_var = ctk.StringVar()
+        ctk.CTkEntry(dialog, textvariable=val_var, height=36, font=F_BODY).pack(fill="x", padx=20, pady=(0, 14))
+        def save():
+            if key_var.get().strip() and val_var.get().strip():
+                mem.remember(key_var.get().strip(), val_var.get().strip())
+                self._refresh()
+                dialog.destroy()
+        ctk.CTkButton(dialog, text="Save", height=40, fg_color=ACCENT,
+                      hover_color="#8aa5ff", text_color="white", font=F_BOLD,
+                      command=save).pack(fill="x", padx=20, pady=(0, 6))
+        ctk.CTkButton(dialog, text="Cancel", height=36, fg_color=SURF2,
+                      hover_color=BORDER, text_color=MUTED, font=F_BODY,
+                      command=dialog.destroy).pack(fill="x", padx=20)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PLUGINS TAB
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PluginsTab(ctk.CTkScrollableFrame):
+    def __init__(self, master, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self._build()
+
+    def _build(self):
+        ctk.CTkLabel(self, text="Plugins", font=F_TITLE, text_color=TEXT).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(self, text="Drop a .py file in the /plugins folder to add new tools. Restart ARIA to load.",
+                     font=F_SMALL, text_color=MUTED, wraplength=600).pack(anchor="w", pady=(0, 16))
+
+        plugins_dir = Path(__file__).parent / "plugins"
+        ctk.CTkButton(self, text="📁 Open plugins folder", width=180, height=36,
+                      fg_color=SURF2, border_color=BORDER, border_width=1,
+                      hover_color=SURF3, text_color=TEXT, font=F_BODY,
+                      command=lambda: os.startfile(str(plugins_dir)) if os.name == "nt" else None
+                      ).pack(anchor="w", pady=(0, 20))
+
+        plugins = get_plugin_info()
+        if not plugins:
+            ctk.CTkLabel(self, text="No plugins found. Add a .py file to /plugins.",
+                         font=F_BODY, text_color=MUTED).pack(pady=20)
+            return
+
+        for p in plugins:
+            card = ctk.CTkFrame(self, fg_color=SURF2, corner_radius=12)
+            card.pack(fill="x", pady=6)
+            status_color = SUCCESS if p["status"] == "loaded" else DANGER
+            hdr = ctk.CTkFrame(card, fg_color="transparent")
+            hdr.pack(fill="x", padx=14, pady=(12, 4))
+            ctk.CTkLabel(hdr, text=p["file"], font=F_BOLD, text_color=TEXT).pack(side="left")
+            ctk.CTkLabel(hdr, text=f"● {p['status']}", font=F_SMALL,
+                         text_color=status_color).pack(side="right")
+            ctk.CTkLabel(card, text=p["description"], font=F_BODY,
+                         text_color=MUTED, anchor="w", wraplength=580).pack(anchor="w", padx=14)
+            if p["tools"]:
+                tools_text = "Tools: " + ", ".join(p["tools"])
+                ctk.CTkLabel(card, text=tools_text, font=F_SMALL,
+                             text_color=ACCENT, anchor="w").pack(anchor="w", padx=14, pady=(4, 12))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SYSTEM MONITOR WIDGET (sidebar)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SystemMonitor(ctk.CTkFrame):
+    def __init__(self, master, **kw):
+        super().__init__(master, fg_color=SURF2, corner_radius=10, **kw)
+        self._build()
+        self._update()
+
+    def _build(self):
+        ctk.CTkLabel(self, text="SYSTEM", font=("Segoe UI Semibold", 9),
+                     text_color=MUTED).pack(anchor="w", padx=10, pady=(8, 2))
+        self.cpu_lbl = ctk.CTkLabel(self, text="CPU  —", font=F_SMALL, text_color=MUTED)
+        self.cpu_lbl.pack(anchor="w", padx=10)
+        self.ram_lbl = ctk.CTkLabel(self, text="RAM  —", font=F_SMALL, text_color=MUTED)
+        self.ram_lbl.pack(anchor="w", padx=10, pady=(0, 8))
+
+    def _update(self):
+        if PSUTIL:
+            try:
+                cpu = psutil.cpu_percent(interval=None)
+                ram = psutil.virtual_memory().percent
+                cpu_color = DANGER if cpu > 80 else WARNING if cpu > 50 else MUTED
+                ram_color = DANGER if ram > 85 else WARNING if ram > 70 else MUTED
+                self.cpu_lbl.configure(text=f"CPU  {cpu:.0f}%", text_color=cpu_color)
+                self.ram_lbl.configure(text=f"RAM  {ram:.0f}%", text_color=ram_color)
+            except Exception:
+                pass
+        try:
+            self.after(5000, self._update)
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SETTINGS TAB
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SettingsTab(ctk.CTkScrollableFrame):
+    def __init__(self, master, on_saved, app=None, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self.on_saved = on_saved
+        self.app = app
+        self._build()
+
+    def _build(self):
+        s = cfg.load()
+        ctk.CTkLabel(self, text="Settings", font=F_TITLE, text_color=TEXT).pack(anchor="w", pady=(0, 2))
+        ctk.CTkLabel(self, text="Configure AI providers, privacy, and behaviour.",
+                     font=F_SMALL, text_color=MUTED).pack(anchor="w", pady=(0, 20))
+
+        def section(title):
+            ctk.CTkLabel(self, text=title, font=F_HEAD, text_color=TEXT).pack(anchor="w", pady=(14, 0))
+            ctk.CTkFrame(self, fg_color=BORDER, height=1).pack(fill="x", pady=(4, 12))
+
+        def lbl(text):
+            ctk.CTkLabel(self, text=text, font=F_BOLD, text_color=MUTED).pack(anchor="w")
+
+        # Provider
+        section("AI Provider")
+        self.provider_var = ctk.StringVar(value=s.get("provider", "claude"))
+        prow = ctk.CTkFrame(self, fg_color="transparent")
+        prow.pack(fill="x", pady=(4, 14))
+        for val, lab in [("claude","Claude (Anthropic)"),("openai","ChatGPT (OpenAI)"),("local","Local (Ollama)")]:
+            ctk.CTkRadioButton(prow, text=lab, variable=self.provider_var, value=val,
+                               font=F_BODY, text_color=TEXT).pack(side="left", padx=14)
+
+        lbl("Claude model")
+        self.claude_model = ctk.StringVar(value=s.get("claude_model","claude-opus-4-5"))
+        ctk.CTkComboBox(self, variable=self.claude_model, height=38, font=F_BODY,
+                        values=["claude-opus-4-5","claude-sonnet-4-5","claude-haiku-4-5-20251001"],
+                        dropdown_fg_color=SURF2).pack(fill="x", pady=(4,12))
+
+        lbl("OpenAI model")
+        self.openai_model = ctk.StringVar(value=s.get("openai_model","gpt-4o"))
+        ctk.CTkComboBox(self, variable=self.openai_model, height=38, font=F_BODY,
+                        values=["gpt-4o","gpt-4-turbo","gpt-3.5-turbo"],
+                        dropdown_fg_color=SURF2).pack(fill="x", pady=(4,12))
+
+        lbl("Local model (Ollama)")
+        self.local_model = ctk.StringVar(value=s.get("ollama_model","llama3"))
+        ctk.CTkComboBox(self, variable=self.local_model, height=38, font=F_BODY,
+                        values=["llama3","mistral","gemma","phi3","llama3:70b","qwen2.5-coder:32b"],
+                        dropdown_fg_color=SURF2).pack(fill="x", pady=(4,12))
+
+        lbl("Ollama URL")
+        self.ollama_url = ctk.StringVar(value=s.get("ollama_url","http://localhost:11434"))
+        ctk.CTkEntry(self, textvariable=self.ollama_url, height=38, font=F_BODY).pack(fill="x", pady=(4,12))
+
+        # API Keys
+        section("API Keys")
+        ctk.CTkLabel(self, text="🔒 Stored only on your computer in AppData. Never uploaded.",
+                     font=F_SMALL, text_color=MUTED).pack(anchor="w", pady=(0, 8))
+
+        lbl("Claude API key")
+        self.claude_key = ctk.StringVar(value=s.get("claude_api_key",""))
+        ctk.CTkEntry(self, textvariable=self.claude_key, show="•", height=38, font=F_BODY,
+                     placeholder_text="sk-ant-...").pack(fill="x", pady=(4,12))
+
+        lbl("OpenAI API key")
+        self.openai_key = ctk.StringVar(value=s.get("openai_api_key",""))
+        ctk.CTkEntry(self, textvariable=self.openai_key, show="•", height=38, font=F_BODY,
+                     placeholder_text="sk-...").pack(fill="x", pady=(4,12))
+
+        # Workspace
+        section("Workspace")
+        lbl("Default folder")
+        ws_row = ctk.CTkFrame(self, fg_color="transparent")
+        ws_row.pack(fill="x", pady=(4,12))
+        ws_row.columnconfigure(0, weight=1)
+        self.workspace = ctk.StringVar(value=s.get("workspace_folder", str(Path.home() / "Documents")))
+        ctk.CTkEntry(ws_row, textvariable=self.workspace, height=38, font=F_BODY
+                     ).grid(row=0, column=0, sticky="ew")
+        ctk.CTkButton(ws_row, text="Browse", width=90, height=38,
+                      fg_color=SURF2, hover_color=BORDER, text_color=TEXT, font=F_BODY,
+                      command=self._browse).grid(row=0, column=1, padx=(8,0))
+
+        # Behaviour
+        section("Behaviour")
+        checks = [
+            ("computer_use_enabled", "Enable Computer Use (AI controls mouse & keyboard)"),
+            ("browser_enabled",       "Enable web browser (AI can browse websites)"),
+            ("show_agent_thinking",   "Show tool activity in chat"),
+            ("auto_save_chats",       "Auto-save conversations to history"),
+            ("clipboard_watcher",     "Watch clipboard and offer to process copied text"),
+            ("minimize_to_tray",      "Minimize to system tray instead of closing"),
+        ]
+        self._check_vars = {}
+        for key, label in checks:
+            var = ctk.BooleanVar(value=s.get(key, True))
+            self._check_vars[key] = var
+            ctk.CTkCheckBox(self, text=label, variable=var,
+                            font=F_BODY, text_color=TEXT).pack(anchor="w", pady=3)
+
+        lbl("Max response length (tokens)")
+        self.max_tokens = ctk.StringVar(value=str(s.get("max_tokens", 4096)))
+        ctk.CTkComboBox(self, variable=self.max_tokens, height=38, font=F_BODY,
+                        values=["1024","2048","4096","8192"],
+                        dropdown_fg_color=SURF2).pack(fill="x", pady=(4,20))
+
+        # Updates
+        section("Updates")
+        self._check_vars["auto_check_updates"] = ctk.BooleanVar(value=s.get("auto_check_updates", True))
+        ctk.CTkCheckBox(self, text="Check for updates on startup",
+                        variable=self._check_vars["auto_check_updates"],
+                        font=F_BODY, text_color=TEXT).pack(anchor="w", pady=3)
+
+        lbl("GitHub repo (owner/name)")
+        self.github_repo = ctk.StringVar(value=s.get("github_repo", ""))
+        ctk.CTkEntry(self, textvariable=self.github_repo, height=38, font=F_BODY,
+                     placeholder_text="yourusername/aria-desktop-assistant").pack(fill="x", pady=(4, 8))
+
+        ver_row = ctk.CTkFrame(self, fg_color="transparent")
+        ver_row.pack(fill="x", pady=(0, 20))
+        ctk.CTkLabel(ver_row, text=f"Current version: v{updater.get_current_version()}",
+                     font=F_SMALL, text_color=MUTED).pack(side="left")
+        self.update_status = ctk.CTkLabel(ver_row, text="", font=F_SMALL, text_color=ACCENT)
+        self.update_status.pack(side="left", padx=10)
+        ctk.CTkButton(ver_row, text="Check now", width=120, height=32,
+                      fg_color=SURF2, hover_color=BORDER, text_color=TEXT, font=F_SMALL,
+                      command=self._check_updates).pack(side="right")
+
+        ctk.CTkButton(self, text="Save Settings", height=44, fg_color=ACCENT,
+                      hover_color="#8aa5ff", text_color="white", font=F_BOLD,
+                      command=self._save).pack(fill="x", pady=(0,8))
+
+    def _browse(self):
+        folder = filedialog.askdirectory(title="Select workspace folder")
+        if folder:
+            self.workspace.set(folder)
+
+    def _save(self):
+        s = cfg.load()
+        s["provider"] = self.provider_var.get()
+        s["claude_model"] = self.claude_model.get()
+        s["openai_model"] = self.openai_model.get()
+        s["ollama_model"] = self.local_model.get()
+        s["ollama_url"] = self.ollama_url.get()
+        s["claude_api_key"] = self.claude_key.get()
+        s["openai_api_key"] = self.openai_key.get()
+        s["workspace_folder"] = self.workspace.get()
+        s["max_tokens"] = int(self.max_tokens.get())
+        s["github_repo"] = self.github_repo.get().strip()
+        for key, var in self._check_vars.items():
+            s[key] = var.get()
+        cfg.save(s)
+        self.on_saved()
+        messagebox.showinfo("Saved", "Settings saved!")
+
+    def _check_updates(self):
+        """Manual update check. Saves the repo field first so the check uses
+        whatever is currently typed in the box."""
+        cfg.set_key("github_repo", self.github_repo.get().strip())
+        if self.app and hasattr(self.app, "check_updates_interactive"):
+            self.app.check_updates_interactive(
+                status_cb=lambda text: self.update_status.configure(text=text))
+        else:
+            self.update_status.configure(text="Update check unavailable.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UPDATE DIALOG
+# ══════════════════════════════════════════════════════════════════════════════
+
+class UpdateDialog(ctk.CTkToplevel):
+    """Shown when a newer release is available. Lets the user download & install
+    in place, open the release page in a browser, or dismiss."""
+
+    def __init__(self, master, info, on_quit_for_update):
+        super().__init__(master)
+        self.info = info
+        self.on_quit_for_update = on_quit_for_update
+        self.title("Update available")
+        self.geometry("480x470")
+        self.resizable(False, False)
+        self.configure(fg_color=SURFACE)
+        self.grab_set()
+        self._build()
+
+    def _build(self):
+        cur = updater.get_current_version()
+        new = self.info.get("version", "?")
+        ctk.CTkLabel(self, text="🚀 Update available", font=F_HEAD, text_color=TEXT
+                     ).pack(anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(self, text=f"You have v{cur}.  Latest is v{new}.",
+                     font=F_SMALL, text_color=MUTED).pack(anchor="w", padx=20, pady=(0, 12))
+
+        ctk.CTkLabel(self, text="Release notes", font=F_BOLD, text_color=TEXT).pack(anchor="w", padx=20)
+        notes = ctk.CTkTextbox(self, height=180, font=F_SMALL, fg_color=SURF2,
+                               text_color=TEXT, border_width=0, wrap="word")
+        notes.pack(fill="both", expand=True, padx=20, pady=(4, 10))
+        notes.insert("end", self.info.get("notes") or "No release notes provided.")
+        notes.configure(state="disabled")
+
+        self.status = ctk.CTkLabel(self, text="", font=F_SMALL, text_color=MUTED)
+        self.status.pack(anchor="w", padx=20)
+        self.progress = ctk.CTkProgressBar(self, height=8)
+        self.progress.set(0)
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=20, pady=(8, 16))
+
+        self.install_btn = ctk.CTkButton(btns, text="Download & Install", height=40,
+                                         fg_color=ACCENT, hover_color="#8aa5ff",
+                                         text_color="white", font=F_BOLD, command=self._install)
+        self.install_btn.pack(side="left", expand=True, fill="x", padx=(0, 4))
+        # Self-update only works in the packaged build; from source just link out.
+        if not updater.is_frozen():
+            self.install_btn.configure(state="disabled")
+            self.status.configure(text="Run the packaged app to auto-install. From source, git pull.")
+
+        ctk.CTkButton(btns, text="Open release page", height=40, fg_color=SURF2,
+                      hover_color=BORDER, text_color=TEXT, font=F_BODY,
+                      command=self._open_page).pack(side="left", expand=True, fill="x", padx=4)
+        ctk.CTkButton(btns, text="Later", height=40, width=70, fg_color="transparent",
+                      hover_color=SURF2, text_color=MUTED, font=F_BODY,
+                      command=self.destroy).pack(side="left", padx=(4, 0))
+
+    def _open_page(self):
+        import webbrowser
+        url = self.info.get("html_url")
+        if url:
+            webbrowser.open(url)
+
+    def _install(self):
+        self.install_btn.configure(state="disabled", text="Downloading…")
+        self.progress.pack(fill="x", padx=20, pady=(0, 8))
+        updater.download_and_apply(
+            self.info,
+            on_progress=lambda frac: on_main(self, lambda f=frac: self.progress.set(f)),
+            on_ready=lambda: on_main(self, self._apply),
+            on_error=lambda msg: on_main(self, lambda m=msg: self._fail(m)),
+        )
+
+    def _apply(self):
+        self.status.configure(text="Update ready. Restarting ARIA…", text_color=SUCCESS)
+        # Hand off to the helper script, which waits for this process to exit.
+        self.after(800, self.on_quit_for_update)
+
+    def _fail(self, msg):
+        self.status.configure(text=msg, text_color=DANGER)
+        self.install_btn.configure(state="normal", text="Retry")
+        self.progress.pack_forget()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN WINDOW
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ARIAApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("ARIA — Personal AI Assistant")
+        self.geometry("1180x740")
+        self.minsize(860, 580)
+        self.configure(fg_color=BG)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self._setup_services()
+        self._build()
+        self._setup_hotkey()
+        self._maybe_check_updates()
+
+    def _setup_services(self):
+        # Scheduler
+        self.scheduler = TaskScheduler(
+            on_task_start=lambda tid, name: on_main(self, lambda: self._on_task_start(tid, name)),
+            on_task_done=lambda tid, name, res: on_main(self, lambda: self._on_task_done(tid, name, res)),
+        )
+        self.scheduler.start()
+
+        # System tray
+        self.tray = TrayManager(
+            on_show=lambda: on_main(self, self._show_window),
+            on_quit=lambda: on_main(self, self.destroy),
+            on_new_chat=lambda: on_main(self, self._new_chat),
+        )
+        self.tray.start()
+
+        # Clipboard watcher
+        self.clip_watcher = ClipboardWatcher(
+            on_new_content=lambda text: self._on_clipboard(text),
+        )
+        if cfg.get("clipboard_watcher", True):
+            self.clip_watcher.start()
+
+    def _setup_hotkey(self):
+        """Register global hotkey Ctrl+Shift+Space to show ARIA."""
+        try:
+            from pynput import keyboard as kb
+            def on_activate():
+                on_main(self, self._show_window)
+            hotkey = kb.GlobalHotKeys({"<ctrl>+<shift>+<space>": on_activate})
+            t = threading.Thread(target=hotkey.run, daemon=True)
+            t.start()
+        except Exception:
+            pass
+
+    def _build(self):
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        # ── Sidebar ────────────────────────────────────────────────────────
+        sb = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0, width=210)
+        sb.grid(row=0, column=0, sticky="nsew")
+        sb.grid_propagate(False)
+        sb.rowconfigure(10, weight=1)
+
+        # Logo
+        logo = ctk.CTkFrame(sb, fg_color="transparent")
+        logo.pack(fill="x", padx=16, pady=(20, 24))
+        ctk.CTkLabel(logo, text="ARIA", font=("Segoe UI Black", 26), text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(logo, text=".", font=("Segoe UI Black", 30), text_color=ACCENT).pack(side="left")
+
+        # Nav
+        self._active_tab = None
+        self.nav_btns = {}
+        nav_items = [
+            ("chat",     "💬", "Chat"),
+            ("tasks",    "⚡", "Tasks"),
+            ("calendar", "📅", "Calendar"),
+            ("memory",   "🧠", "Memory"),
+            ("plugins",  "🔌", "Plugins"),
+            ("settings", "⚙",  "Settings"),
+        ]
+        for tab_id, icon, label in nav_items:
+            btn = ctk.CTkButton(
+                sb, text=f"  {icon}  {label}", anchor="w", height=44,
+                fg_color="transparent", hover_color=SURF2,
+                text_color=MUTED, font=F_BODY, corner_radius=10,
+                command=lambda t=tab_id: self._switch(t),
+            )
+            btn.pack(fill="x", padx=10, pady=2)
+            self.nav_btns[tab_id] = btn
+
+        # Spacer
+        ctk.CTkFrame(sb, fg_color="transparent").pack(fill="both", expand=True)
+
+        # System monitor
+        self.sysmon = SystemMonitor(sb)
+        self.sysmon.pack(fill="x", padx=10, pady=4)
+
+        # Status box
+        stat = ctk.CTkFrame(sb, fg_color=SURF2, corner_radius=10)
+        stat.pack(fill="x", padx=10, pady=(4, 14))
+        ctk.CTkLabel(stat, text="STATUS", font=("Segoe UI Semibold", 9),
+                     text_color=MUTED).pack(anchor="w", padx=12, pady=(8, 2))
+        self.status_lbl = ctk.CTkLabel(stat, text="● Ready", font=F_SMALL, text_color=SUCCESS)
+        self.status_lbl.pack(anchor="w", padx=12)
+        self.provider_lbl = ctk.CTkLabel(stat, text=f"Provider: {cfg.get('provider','claude')}",
+                                          font=F_SMALL, text_color=MUTED)
+        self.provider_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+
+        # ── Content ────────────────────────────────────────────────────────
+        self.content = ctk.CTkFrame(self, fg_color="transparent")
+        self.content.grid(row=0, column=1, sticky="nsew", padx=16, pady=16)
+        self.content.columnconfigure(0, weight=1)
+        self.content.rowconfigure(0, weight=1)
+
+        self.chat_tab    = ChatTab(self.content, self, on_notify=self._notify)
+        self.tasks_tab   = TasksTab(self.content, self, self.scheduler)
+        self.calendar_tab = CalendarTab(self.content, self, self.scheduler)
+        self.memory_tab  = MemoryTab(self.content)
+        self.plugins_tab = PluginsTab(self.content)
+        self.settings_tab = SettingsTab(self.content, on_saved=self._on_settings_saved, app=self)
+
+        self._tabs = {
+            "chat": self.chat_tab,
+            "tasks": self.tasks_tab,
+            "calendar": self.calendar_tab,
+            "memory": self.memory_tab,
+            "plugins": self.plugins_tab,
+            "settings": self.settings_tab,
+        }
+        self._switch("chat")
+
+    # ── Navigation ─────────────────────────────────────────────────────────
+
+    def _switch(self, tab_id):
+        if self._active_tab == tab_id:
+            return
+        self._active_tab = tab_id
+        for tid, btn in self.nav_btns.items():
+            btn.configure(fg_color=SURF2 if tid == tab_id else "transparent",
+                          text_color=TEXT if tid == tab_id else MUTED)
+        for tid, tab in self._tabs.items():
+            if tid == tab_id:
+                tab.grid(row=0, column=0, sticky="nsew")
+            else:
+                tab.grid_remove()
+        # Calendar reflects tasks created in other tabs, so refresh on entry.
+        if tab_id == "calendar":
+            self.calendar_tab.refresh()
+
+    # ── Event handlers ─────────────────────────────────────────────────────
+
+    def _on_task_start(self, task_id, name):
+        self.status_lbl.configure(text=f"⚙  {name}…", text_color=ACCENT)
+        self.tray.update_status(f"Running: {name}")
+
+    def _on_task_done(self, task_id, name, result):
+        self.status_lbl.configure(text="● Ready", text_color=SUCCESS)
+        self.tray.update_status("Ready")
+        self.tasks_tab.on_task_done(task_id, name, result)
+        self._notify("Task complete", f"{name} finished.")
+
+    def _notify(self, title: str, message: str):
+        """Send a desktop notification (only if window is not focused)."""
+        try:
+            if not self.focus_displayof():
+                send_notification(title, message, duration=4)
+        except Exception:
+            pass
+
+    def _on_clipboard(self, text: str):
+        if cfg.get("clipboard_watcher", True):
+            self.chat_tab.on_clipboard(text)
+
+    def _on_settings_saved(self):
+        provider = cfg.get("provider", "claude")
+        self.provider_lbl.configure(text=f"Provider: {provider}")
+        self.chat_tab.reload_agents()
+        # Update clipboard watcher state
+        if cfg.get("clipboard_watcher", True):
+            self.clip_watcher.set_enabled(True)
+        else:
+            self.clip_watcher.set_enabled(False)
+
+    def _show_window(self):
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _new_chat(self):
+        self._show_window()
+        self.chat_tab._save_and_clear()
+        self._switch("chat")
+
+    # ── Updates ──────────────────────────────────────────────────────────────
+
+    def _maybe_check_updates(self):
+        """Silently check for updates on startup if enabled. Only surfaces a
+        dialog when a newer version is actually available."""
+        if not cfg.get("auto_check_updates", True):
+            return
+        updater.check_for_updates(
+            on_update_available=lambda info: on_main(self, lambda: self._show_update_dialog(info)),
+        )
+
+    def check_updates_interactive(self, status_cb=None):
+        """Check on demand (from Settings). `status_cb(text)` reports progress."""
+        if status_cb:
+            status_cb("Checking…")
+
+        def report(text):
+            if status_cb:
+                on_main(self, lambda: status_cb(text))
+
+        updater.check_for_updates(
+            on_update_available=lambda info: on_main(self, lambda: (
+                report(f"Update available: v{info['version']}"),
+                self._show_update_dialog(info))),
+            on_up_to_date=lambda: report(
+                f"You're up to date (v{updater.get_current_version()})."),
+            on_error=lambda msg: report(msg),
+        )
+
+    def _show_update_dialog(self, info):
+        UpdateDialog(self, info, on_quit_for_update=self.destroy)
+
+    def _on_close(self):
+        if cfg.get("minimize_to_tray", True):
+            self.withdraw()
+        else:
+            self.destroy()
+
+
+# ── Entry point ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    app = ARIAApp()
+    app.mainloop()
