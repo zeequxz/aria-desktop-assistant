@@ -657,7 +657,7 @@ class ChatTab(ctk.CTkFrame):
             color = agent_color(self.active_agent)
             self.msg_box.configure(state="normal")
             self.msg_box.insert("end", f"\n\n{agent_name}\n", "ai_label")
-            self.msg_box.tag_config("ai_label", foreground=color, font=F_BOLD)
+            self.msg_box.tag_config("ai_label", foreground=color)
             self.msg_box.configure(state="disabled")
         self.msg_box.configure(state="normal")
         self.msg_box.insert("end", token)
@@ -718,19 +718,19 @@ class ChatTab(ctk.CTkFrame):
         if role == "user":
             self.msg_box.insert("end", "\n\nYou\n", "user_label")
             self.msg_box.insert("end", text + "\n")
-            self.msg_box.tag_config("user_label", foreground=ACCENT, font=F_BOLD)
+            self.msg_box.tag_config("user_label", foreground=ACCENT)
         elif role == "assistant":
             agent_name = self.active_agent["name"] if self.active_agent else "ARIA"
             color = agent_color(self.active_agent)
             self.msg_box.insert("end", f"\n\n{agent_name}\n", "ai_lbl2")
             self.msg_box.insert("end", text + "\n")
-            self.msg_box.tag_config("ai_lbl2", foreground=color, font=F_BOLD)
+            self.msg_box.tag_config("ai_lbl2", foreground=color)
         elif role == "tool":
             self.msg_box.insert("end", f"\n  ⚙ {text}\n", "tool_t")
-            self.msg_box.tag_config("tool_t", foreground=MUTED, font=F_SMALL)
+            self.msg_box.tag_config("tool_t", foreground=MUTED)
         elif role == "error":
             self.msg_box.insert("end", f"\n  ⚠ {text}\n", "err_t")
-            self.msg_box.tag_config("err_t", foreground=DANGER, font=F_SMALL)
+            self.msg_box.tag_config("err_t", foreground=DANGER)
         self.msg_box.configure(state="disabled")
         self.msg_box.see("end")
 
