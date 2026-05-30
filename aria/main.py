@@ -915,6 +915,25 @@ class ChatTab(ctk.CTkFrame):
         self.voice_bar.grid_remove()
         self._append_msg("error", f"Voice error: {err}")
 
+    # ── Text-to-speech ───────────────────────────────────────────────────────
+
+    def _toggle_tts(self):
+        """Flip spoken replies on/off and update the speaker button."""
+        if not tts.is_available():
+            messagebox.showinfo(
+                "Text-to-speech",
+                "Speech engine not available. Install it with:\n\npip install pyttsx3",
+            )
+            return
+        enabled = not cfg.get("tts_enabled", False)
+        cfg.set_key("tts_enabled", enabled)
+        self.tts_btn.configure(
+            text="🔊" if enabled else "🔇",
+            fg_color=tint(ACCENT, 0x33) if enabled else SURF2,
+        )
+        if not enabled:
+            tts.stop()  # cut off any in-progress speech
+
     # ── Send & agent loop ──────────────────────────────────────────────────
 
     def _on_enter(self, event):
