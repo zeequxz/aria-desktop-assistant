@@ -118,7 +118,13 @@ def _parse_sse(resp, on_token: Callable) -> dict:
     tool_calls = {}  # call_id -> {name, arguments}
 
     for raw in resp.iter_lines(decode_unicode=True):
-        if not raw or not raw.startswith("data:"):
+        if not raw:
+            continue
+        # iter_lines can still yield bytes when the response has no charset;
+        # normalize to str before any string ops.
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        if not raw.startswith("data:"):
             continue
         data = raw[len("data:"):].strip()
         if data == "[DONE]":
