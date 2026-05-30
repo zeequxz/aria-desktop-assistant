@@ -40,6 +40,22 @@ USER_AGENT = "codex_cli_rs/0.77.0 (ARIA; desktop assistant)"
 # The Codex backend requires an "instructions" preamble or it rejects the call.
 _DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 
+# The ChatGPT-account Codex backend ONLY accepts its own "gpt-X.X-codex" models.
+# Standard ids like gpt-4o return: "The 'gpt-4o' model is not supported when
+# using Codex with a ChatGPT account." If the user has a non-codex model
+# selected, fall back to the current flagship.
+DEFAULT_CODEX_MODEL = "gpt-5.5-codex"
+
+
+def _resolve_model(model: str) -> str:
+    """Map the configured model to one the Codex backend accepts. The backend
+    rejects legacy ids (gpt-4o, gpt-4-turbo, gpt-3.5-...) but accepts the
+    current gpt-5.x family / *-codex variants, so pass those through and only
+    rewrite the legacy ones."""
+    if model and (model.startswith("gpt-5") or model.endswith("-codex")):
+        return model
+    return DEFAULT_CODEX_MODEL
+
 
 def _headers(access_token: str, account_id: str) -> dict:
     return {
@@ -165,6 +181,7 @@ def run(orchestrator, messages, system_prompt, all_tools, schemas, model, max_it
 
     convo = _to_responses_input(messages)
     tools = _to_responses_tools(schemas)
+    model = _resolve_model(model)  # Codex backend only accepts gpt-*-codex ids
 
     for _ in range(max_iters):
         if orchestrator._stop:
