@@ -31,6 +31,13 @@ DEFAULTS = {
     "openai_api_key": "",
     # "apikey" = use openai_api_key; "oauth" = use Sign in with ChatGPT (Codex).
     "openai_auth_mode": "apikey",
+    # ── Messaging channels (Telegram in/out, Discord out) ───────────────────
+    "messaging_enabled": False,
+    "telegram_bot_token": "",
+    # Chat IDs allowed to command the bot. Empty = nobody (the bot will reply
+    # with each sender's id so you can add it here).
+    "telegram_allowlist": [],
+    "discord_webhook_url": "",
     "computer_use_enabled": False,
     "screenshot_interval": 2,
     "theme": "dark",

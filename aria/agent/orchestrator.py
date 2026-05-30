@@ -16,6 +16,7 @@ from agent.computer_tools import COMPUTER_TOOLS, COMPUTER_TOOL_SCHEMAS, take_scr
 from agent.browser_tools import BROWSER_TOOLS, BROWSER_TOOL_SCHEMAS
 from agent.search_tools import SEARCH_TOOLS, SEARCH_TOOL_SCHEMAS
 from agent.memory import MEMORY_TOOLS, MEMORY_TOOL_SCHEMAS, get_memory_summary
+from agent.messaging_tools import MESSAGING_TOOLS, MESSAGING_TOOL_SCHEMAS
 from agent.plugins import load_plugins
 
 try:
@@ -51,8 +52,10 @@ def _build_tool_registry(use_computer: bool, use_browser: bool) -> tuple[dict, l
     tools.update(FILE_TOOLS)
     tools.update(SEARCH_TOOLS)
     tools.update(MEMORY_TOOLS)
+    tools.update(MESSAGING_TOOLS)
     tools.update(_plugin_tools)
-    schemas += FILE_SCHEMAS + SEARCH_TOOL_SCHEMAS + MEMORY_TOOL_SCHEMAS + _plugin_schemas
+    schemas += (FILE_SCHEMAS + SEARCH_TOOL_SCHEMAS + MEMORY_TOOL_SCHEMAS
+                + MESSAGING_TOOL_SCHEMAS + _plugin_schemas)
 
     if use_computer:
         tools.update(COMPUTER_TOOLS)
@@ -303,3 +306,34 @@ def run_agent_in_thread(
     )
     t.start()
     return orch
+
+
+def run_agent_sync(prompt: str, system_prompt: str = "You are a helpful assistant.",
+                   use_computer_tools: bool = True, use_browser_tools: bool = True) -> str:
+    """Run the agent to completion on a single prompt and return the reply text.
+    Used by the messaging service (which is already on a background thread).
+    Collects streamed tokens and the final/erro r result into one string."""
+    collected = {"text": "", "error": None}
+
+    def on_token(t):
+        collected["text"] += t
+
+    def on_done(text):
+        # Prefer the streamed text; fall back to the final text if empty.
+        if not collected["text"]:
+            collected["text"] = text or ""
+
+    def on_error(e):
+        collected["error"] = str(e)
+
+    orch = AgentOrchestrator(on_token, lambda *a: None, lambda *a: None, on_done, on_error)
+    orch.run(
+        messages=[{"role": "user", "content": prompt}],
+        system_prompt=system_prompt,
+        use_computer_tools=use_computer_tools,
+        use_browser_tools=use_browser_tools,
+        include_screenshot=False,
+    )
+    if collected["error"] and not collected["text"]:
+        return f"Error: {collected['error']}"
+    return collected["text"].strip()

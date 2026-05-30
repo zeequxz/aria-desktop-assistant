@@ -26,8 +26,9 @@ except ImportError:
     sys.exit(1)
 
 from config import settings as cfg
-from agent.orchestrator import run_agent_in_thread
+from agent.orchestrator import run_agent_in_thread, run_agent_sync
 from agent.scheduler import TaskScheduler
+from agent.messaging import MessagingService
 from agent.tray import TrayManager, send_notification
 from agent.clipboard_watcher import ClipboardWatcher
 from agent.voice import VoiceRecorder
@@ -2089,6 +2090,10 @@ class SettingsTab(ctk.CTkScrollableFrame):
         s["workspace_folder"] = self.workspace.get()
         s["max_tokens"] = int(self.max_tokens.get())
         s["github_repo"] = self.github_repo.get().strip()
+        s["telegram_bot_token"] = self.telegram_token.get().strip()
+        s["discord_webhook_url"] = self.discord_webhook.get().strip()
+        # Parse the comma-separated allowlist into a clean list of id strings.
+        s["telegram_allowlist"] = [c.strip() for c in self.telegram_allow.get().split(",") if c.strip()]
         theme_changed = s.get("theme") != self.theme_var.get()
         s["theme"] = self.theme_var.get()
         for key, var in self._check_vars.items():
@@ -2109,6 +2114,40 @@ class SettingsTab(ctk.CTkScrollableFrame):
                 status_cb=lambda text: self.update_status.configure(text=text))
         else:
             self.update_status.configure(text="Update check unavailable.")
+
+    # ── Messaging tests ──────────────────────────────────────────────────────
+
+    def _test_telegram(self):
+        from agent import messaging
+        token = self.telegram_token.get().strip()
+        self.telegram_status.configure(text="Checking…", text_color=ACCENT)
+
+        def work():
+            info = messaging.telegram_get_me(token)
+            if info:
+                txt = f"✓ Connected as @{info.get('username', '?')}"
+                col = SUCCESS
+            else:
+                txt = "✗ Invalid token"
+                col = DANGER
+            on_main(self, lambda: self.telegram_status.configure(text=txt, text_color=col))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _test_discord(self):
+        from agent import messaging
+        url = self.discord_webhook.get().strip()
+        if not url:
+            messagebox.showinfo("Discord", "Enter a webhook URL first.")
+            return
+
+        def work():
+            # Temporarily use this URL via a throwaway send.
+            ok = messaging._post_json(url, {"content": "✅ ARIA test message"}, timeout=15) is not None
+            on_main(self, lambda: messagebox.showinfo(
+                "Discord", "Test message sent!" if ok else "Failed to send. Check the URL."))
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ── OpenAI ChatGPT sign-in (Codex OAuth) ─────────────────────────────────
 
@@ -2260,6 +2299,23 @@ class ARIAApp(ctk.CTk):
         if cfg.get("clipboard_watcher", True):
             self.clip_watcher.start()
 
+        # Messaging channels (Telegram in/out, Discord out). Inbound Telegram
+        # messages run the agent with the default assistant prompt and full
+        # tools (per the user's chosen security level).
+        self.messaging = MessagingService(
+            run_agent=self._run_agent_for_messaging,
+            on_status=lambda s: on_main(self, lambda: self.status_lbl.configure(text=f"● {s}")),
+        )
+        self.messaging.start()
+
+    def _run_agent_for_messaging(self, prompt: str) -> str:
+        """Run the agent for an inbound Telegram message. Uses the first agent's
+        system prompt and allows all tools (computer use included)."""
+        agents = cfg.get("agents", [])
+        system = agents[0]["system"] if agents else "You are a helpful assistant."
+        return run_agent_sync(prompt, system_prompt=system,
+                              use_computer_tools=True, use_browser_tools=True)
+
     def _setup_hotkey(self):
         """Register global hotkey Ctrl+Shift+Space to show ARIA."""
         try:
@@ -2401,6 +2457,9 @@ class ARIAApp(ctk.CTk):
             self.clip_watcher.set_enabled(True)
         else:
             self.clip_watcher.set_enabled(False)
+        # Apply any messaging changes (token / enabled toggled in Settings).
+        if hasattr(self, "messaging"):
+            self.messaging.restart()
 
     def _show_window(self):
         self.deiconify()
