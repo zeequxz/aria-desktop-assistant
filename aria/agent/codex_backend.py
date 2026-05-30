@@ -40,11 +40,10 @@ USER_AGENT = "codex_cli_rs/0.77.0 (ARIA; desktop assistant)"
 # The Codex backend requires an "instructions" preamble or it rejects the call.
 _DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 
-# The ChatGPT-account Codex backend ONLY accepts its own "gpt-X.X-codex" models.
-# Standard ids like gpt-4o return: "The 'gpt-4o' model is not supported when
-# using Codex with a ChatGPT account." If the user has a non-codex model
-# selected, fall back to the current flagship.
-DEFAULT_CODEX_MODEL = "gpt-5.5-codex"
+# The ChatGPT-account Codex backend rejects legacy ids (gpt-4o, etc.) with
+# "The 'gpt-4o' model is not supported when using Codex with a ChatGPT account."
+# Fall back to gpt-5.5, which is confirmed working against the live backend.
+DEFAULT_CODEX_MODEL = "gpt-5.5"
 
 
 def _resolve_model(model: str) -> str:
