@@ -477,19 +477,35 @@ class ChatTab(ctk.CTkFrame):
                                  corner_radius=6)
             frame.pack(fill="x", pady=1)
             frame.columnconfigure(0, weight=1)
-            ctk.CTkButton(
-                frame, text=c["title"][:26], anchor="w", height=32,
+            open_btn = ctk.CTkButton(
+                frame, text=c["title"][:24], anchor="w", height=32,
                 fg_color="transparent", hover_color=SURF2,
                 text_color=TEXT if is_current else MUTED, font=F_SMALL, corner_radius=6,
                 command=lambda fn=c["filename"]: self._load_history(fn),
-            ).grid(row=0, column=0, sticky="ew")
-            ctk.CTkButton(frame, text="✕", width=24, height=32, fg_color="transparent",
-                          hover_color=tint(DANGER, 0x33), text_color=MUTED, font=F_SMALL,
-                          command=lambda fn=c["filename"]: self._delete_chat(fn)).grid(row=0, column=1)
+            )
+            open_btn.grid(row=0, column=0, sticky="ew")
+            Tooltip(open_btn, c["title"])
+            ren = ctk.CTkButton(frame, text="✎", width=22, height=32, fg_color="transparent",
+                                hover_color=SURF2, text_color=MUTED, font=F_SMALL,
+                                command=lambda fn=c["filename"], t=c["title"]: self._rename_chat(fn, t))
+            ren.grid(row=0, column=1)
+            Tooltip(ren, "Rename this chat")
+            dele = ctk.CTkButton(frame, text="✕", width=22, height=32, fg_color="transparent",
+                                 hover_color=tint(DANGER, 0x33), text_color=MUTED, font=F_SMALL,
+                                 command=lambda fn=c["filename"]: self._delete_chat(fn))
+            dele.grid(row=0, column=2)
+            Tooltip(dele, "Delete this chat")
             if c.get("snippet"):
                 ctk.CTkLabel(frame, text=c["snippet"], font=("Segoe UI", 9),
                              text_color=MUTED, anchor="w", justify="left",
-                             wraplength=170).grid(row=1, column=0, columnspan=2, sticky="w", padx=10)
+                             wraplength=170).grid(row=1, column=0, columnspan=3, sticky="w", padx=10)
+
+    def _rename_chat(self, filename, current_title):
+        dlg = ctk.CTkInputDialog(text="New chat name:", title="Rename chat")
+        new = dlg.get_input()
+        if new and new.strip():
+            hist.rename_conversation(filename, new.strip())
+            self._refresh_history()
 
     def _delete_chat(self, filename):
         if not messagebox.askyesno("Delete chat", "Delete this chat permanently?"):

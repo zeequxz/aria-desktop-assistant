@@ -172,6 +172,22 @@ def delete_conversation(filename: str) -> bool:
     return False
 
 
+def rename_conversation(filename: str, new_title: str) -> bool:
+    """Change a saved chat's title (keeps the same file). Returns success."""
+    path = HISTORY_DIR / filename
+    if not path.exists() or not new_title.strip():
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["title"] = new_title.strip()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+
 def _prune_old_files():
     files = sorted(HISTORY_DIR.glob("*.json"), reverse=True)
     for old in files[MAX_HISTORY_FILES:]:
