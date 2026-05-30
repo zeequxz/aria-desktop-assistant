@@ -2068,6 +2068,51 @@ class SettingsTab(ctk.CTkScrollableFrame):
                       fg_color=SURF2, hover_color=BORDER, text_color=TEXT, font=F_SMALL,
                       command=self._check_updates).pack(side="right")
 
+        # ── Messaging ──────────────────────────────────────────────────────────
+        section("Messaging (Telegram / Discord)")
+        ctk.CTkLabel(self, text="Message ARIA from Telegram and let it message "
+                                "you back. ⚠ Inbound messages can run the full "
+                                "agent, including computer control — keep your "
+                                "bot token private and the allowlist tight.",
+                     font=F_SMALL, text_color=MUTED, justify="left",
+                     wraplength=560).pack(anchor="w", pady=(0, 8))
+
+        self._check_vars["messaging_enabled"] = ctk.BooleanVar(value=s.get("messaging_enabled", False))
+        ctk.CTkCheckBox(self, text="Enable messaging channels",
+                        variable=self._check_vars["messaging_enabled"],
+                        font=F_BODY, text_color=TEXT).pack(anchor="w", pady=(0, 8))
+
+        lbl("Telegram bot token  (from @BotFather)")
+        self.telegram_token = ctk.StringVar(value=s.get("telegram_bot_token", ""))
+        ctk.CTkEntry(self, textvariable=self.telegram_token, show="•", height=38, font=F_BODY,
+                     placeholder_text="123456:ABC-...").pack(fill="x", pady=(4, 6))
+        tg_row = ctk.CTkFrame(self, fg_color="transparent")
+        tg_row.pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(tg_row, text="Test token", width=110, height=32, fg_color=SURF2,
+                      hover_color=BORDER, text_color=TEXT, font=F_SMALL,
+                      command=self._test_telegram).pack(side="left")
+        self.telegram_status = ctk.CTkLabel(tg_row, text="", font=F_SMALL, text_color=MUTED)
+        self.telegram_status.pack(side="left", padx=10)
+
+        lbl("Allowed Telegram chat IDs  (comma-separated)")
+        self.telegram_allow = ctk.StringVar(
+            value=", ".join(str(c) for c in s.get("telegram_allowlist", [])))
+        ctk.CTkEntry(self, textvariable=self.telegram_allow, height=38, font=F_BODY,
+                     placeholder_text="e.g. 12345678, 98765432").pack(fill="x", pady=(4, 4))
+        ctk.CTkLabel(self, text="Tip: message your bot — if you're not yet "
+                                "allow-listed it replies with your chat id. Paste "
+                                "that here and save.",
+                     font=F_SMALL, text_color=MUTED, justify="left",
+                     wraplength=560).pack(anchor="w", pady=(0, 10))
+
+        lbl("Discord webhook URL  (send-only)")
+        self.discord_webhook = ctk.StringVar(value=s.get("discord_webhook_url", ""))
+        ctk.CTkEntry(self, textvariable=self.discord_webhook, height=38, font=F_BODY,
+                     placeholder_text="https://discord.com/api/webhooks/...").pack(fill="x", pady=(4, 6))
+        ctk.CTkButton(self, text="Send test message", width=160, height=32, fg_color=SURF2,
+                      hover_color=BORDER, text_color=TEXT, font=F_SMALL,
+                      command=self._test_discord).pack(anchor="w", pady=(0, 14))
+
         ctk.CTkButton(self, text="Save Settings", height=44, fg_color=ACCENT,
                       hover_color="#8aa5ff", text_color="white", font=F_BOLD,
                       command=self._save).pack(fill="x", pady=(0,8))
