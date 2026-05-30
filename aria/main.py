@@ -132,6 +132,59 @@ def on_main(root, fn):
         pass
 
 
+class Tooltip:
+    """A small hover label that appears after a short delay over any widget.
+    Usage: Tooltip(widget, "What this button does")."""
+
+    def __init__(self, widget, text, delay=450):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._after_id = None
+        self._tip = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _show(self):
+        if self._tip or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        except Exception:
+            return
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.wm_overrideredirect(True)
+        self._tip.wm_geometry(f"+{x}+{y}")
+        try:
+            self._tip.attributes("-topmost", True)
+        except Exception:
+            pass
+        tk.Label(self._tip, text=self.text, justify="left",
+                 background="#20202f", foreground="#e4e4f0",
+                 relief="solid", borderwidth=1,
+                 font=("Segoe UI", 9), padx=8, pady=4).pack()
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self._tip:
+            self._tip.destroy()
+            self._tip = None
+
+    def _cancel(self):
+        if self._after_id:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+
 def task_occurs_on(task, d):
     """Return True if `task` is scheduled to run on date `d` (a datetime.date).
     Used by the calendar to mark days. Recurring tasks repeat by their rule;
@@ -173,6 +226,10 @@ class ChatTab(ctk.CTkFrame):
         self._pending_file = None
         self._pending_screenshot = False
         self._voice = None
+        # Projects organize chats (like Codex/Claude). Track which project is
+        # active and which saved chat (if any) is currently open.
+        self.active_project = cfg.get("active_project", "general")
+        self.current_chat_file = None
         self._build()
         self._load_agents()
 
@@ -180,28 +237,46 @@ class ChatTab(ctk.CTkFrame):
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # ── Left sidebar ───────────────────────────────────────────────────
-        left = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14, width=195)
+        # ── Left sidebar: Projects + chats ─────────────────────────────────
+        left = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14, width=210)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         left.grid_propagate(False)
-        left.rowconfigure(2, weight=1)
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(4, weight=1)
 
-        ctk.CTkLabel(left, text="AGENTS", font=("Segoe UI Semibold", 10),
-                     text_color=MUTED).grid(row=0, column=0, sticky="w", padx=14, pady=(14, 4))
-        self.agent_frame = ctk.CTkScrollableFrame(left, fg_color="transparent", height=280)
-        self.agent_frame.grid(row=1, column=0, sticky="nsew", padx=6)
+        # Project selector row
+        proj_hdr = ctk.CTkFrame(left, fg_color="transparent")
+        proj_hdr.grid(row=0, column=0, sticky="ew", padx=10, pady=(12, 2))
+        proj_hdr.columnconfigure(0, weight=1)
+        ctk.CTkLabel(proj_hdr, text="PROJECT", font=("Segoe UI Semibold", 10),
+                     text_color=MUTED).grid(row=0, column=0, sticky="w")
+        mgr_btn = ctk.CTkButton(proj_hdr, text="⚙", width=24, height=24, fg_color="transparent",
+                                hover_color=SURF2, text_color=MUTED, font=F_SMALL,
+                                command=self._manage_projects)
+        mgr_btn.grid(row=0, column=1)
+        Tooltip(mgr_btn, "Manage projects (add / rename / delete)")
 
-        ctk.CTkFrame(left, fg_color=BORDER, height=1).grid(row=2, column=0, sticky="ew", padx=10, pady=6)
+        self.project_var = ctk.StringVar()
+        self.project_menu = ctk.CTkOptionMenu(
+            left, variable=self.project_var, font=F_BODY, height=34,
+            fg_color=SURF2, button_color=SURF3, button_hover_color=BORDER,
+            dropdown_fg_color=SURF2, command=self._on_project_change)
+        self.project_menu.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
 
-        ctk.CTkLabel(left, text="HISTORY", font=("Segoe UI Semibold", 10),
-                     text_color=MUTED).grid(row=3, column=0, sticky="w", padx=14, pady=(4, 4))
+        new_chat = ctk.CTkButton(left, text="＋  New chat", anchor="w", height=36,
+                                 fg_color=tint(ACCENT, 0x22), hover_color=tint(ACCENT, 0x44),
+                                 text_color=ACCENT, font=F_BOLD, corner_radius=8,
+                                 command=self._new_chat)
+        new_chat.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 8))
+        Tooltip(new_chat, "Start a new chat in this project")
+
         self.history_search = ctk.StringVar()
         self.history_search.trace_add("write", lambda *a: self._refresh_history())
         ctk.CTkEntry(left, textvariable=self.history_search, placeholder_text="🔍 Search chats…",
-                     height=30, font=F_SMALL).grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 4))
-        self.history_frame = ctk.CTkScrollableFrame(left, fg_color="transparent")
-        self.history_frame.grid(row=5, column=0, sticky="nsew", padx=6, pady=(0, 6))
-        left.rowconfigure(5, weight=1)
+                     height=30, font=F_SMALL).grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 4))
+        self.history_frame = ctk.CTkScrollableFrame(left, fg_color="transparent", label_text="")
+        self.history_frame.grid(row=4, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        self._refresh_projects()
         self._refresh_history()
 
         # ── Right: chat ────────────────────────────────────────────────────
@@ -218,23 +293,35 @@ class ChatTab(ctk.CTkFrame):
 
         self.agent_icon_lbl = ctk.CTkLabel(hdr, text="✦", font=("Segoe UI", 22), text_color=ACCENT, width=40)
         self.agent_icon_lbl.grid(row=0, column=0, padx=(12, 0), pady=8)
-        info = ctk.CTkFrame(hdr, fg_color="transparent")
-        info.grid(row=0, column=1, sticky="w", padx=8)
-        self.agent_name_lbl = ctk.CTkLabel(info, text="Select an agent", font=F_BOLD, text_color=TEXT)
-        self.agent_name_lbl.pack(anchor="w")
-        self.agent_sub_lbl = ctk.CTkLabel(info, text="", font=F_SMALL, text_color=MUTED)
-        self.agent_sub_lbl.pack(anchor="w")
+
+        # Agent selector as a dropdown menu (cleaner than the old sidebar list).
+        self.agent_var = ctk.StringVar(value="Select an agent")
+        self.agent_menu = ctk.CTkOptionMenu(
+            hdr, variable=self.agent_var, font=F_BOLD, height=34, width=180,
+            fg_color=SURF2, button_color=SURF3, button_hover_color=BORDER,
+            dropdown_fg_color=SURF2, command=self._on_agent_pick)
+        self.agent_menu.grid(row=0, column=1, sticky="w", padx=8)
+        Tooltip(self.agent_menu, "Choose which agent answers in this chat")
+        self.agent_sub_lbl = ctk.CTkLabel(hdr, text="", font=F_SMALL, text_color=MUTED)
+        self.agent_sub_lbl.grid(row=0, column=1, sticky="w", padx=(196, 0))
 
         hdr_btns = ctk.CTkFrame(hdr, fg_color="transparent")
         hdr_btns.grid(row=0, column=2, padx=10)
-        for txt, cmd in [("📷", self._attach_screenshot), ("📁", self._attach_file),
-                         ("🎤", self._toggle_voice), ("📝", self._open_prompt_library),
-                         ("📋", self._copy_chat),
-                         ("⬇", self._export_chat), ("↩", self._save_and_clear)]:
-            ctk.CTkButton(hdr_btns, text=txt, width=34, height=30,
-                          fg_color=SURF2, border_color=BORDER, border_width=1,
-                          hover_color=SURF3, text_color=TEXT, font=F_SMALL,
-                          command=cmd).pack(side="left", padx=2)
+        for txt, cmd, tip in [
+            ("📷", self._attach_screenshot, "Attach a screenshot to your next message"),
+            ("📁", self._attach_file, "Attach a file (text, code, Word, Excel…)"),
+            ("🎤", self._toggle_voice, "Voice input — speak instead of typing"),
+            ("📝", self._open_prompt_library, "Prompt library — insert a saved prompt"),
+            ("📋", self._copy_chat, "Copy this conversation to the clipboard"),
+            ("⬇", self._export_chat, "Export this conversation to a file"),
+            ("✎", self._edit_agents, "Manage agents (add / edit / delete)"),
+        ]:
+            b = ctk.CTkButton(hdr_btns, text=txt, width=34, height=30,
+                              fg_color=SURF2, border_color=BORDER, border_width=1,
+                              hover_color=SURF3, text_color=TEXT, font=F_SMALL,
+                              command=cmd)
+            b.pack(side="left", padx=2)
+            Tooltip(b, tip)
 
         # Messages
         self.msg_box = ctk.CTkTextbox(right, font=F_BODY, wrap="word",
@@ -305,100 +392,121 @@ class ChatTab(ctk.CTkFrame):
     # ── Agent management ───────────────────────────────────────────────────
 
     def _load_agents(self):
-        for w in self.agent_frame.winfo_children():
-            w.destroy()
+        """Populate the header agent dropdown from settings."""
         agents = cfg.get("agents", [])
-        for agent in agents:
-            row = ctk.CTkFrame(self.agent_frame, fg_color="transparent")
-            row.pack(fill="x", pady=1)
-            row.columnconfigure(0, weight=1)
-            ctk.CTkButton(
-                row, text=f"{agent['icon']}  {agent['name']}",
-                anchor="w", height=40,
-                fg_color="transparent", hover_color=SURF2,
-                text_color=TEXT, font=F_BODY, corner_radius=8,
-                command=lambda a=agent: self._select_agent(a),
-            ).grid(row=0, column=0, sticky="ew")
-            # Built-in agents can't be edited; custom ones get a pencil.
-            if not agent.get("builtin"):
-                ctk.CTkButton(row, text="✎", width=26, height=40, fg_color="transparent",
-                              hover_color=SURF2, text_color=MUTED, font=F_SMALL,
-                              command=lambda a=agent: self._edit_agent(a)).grid(row=0, column=1)
-
-        ctk.CTkButton(self.agent_frame, text="+ New agent", anchor="w", height=32,
-                      fg_color="transparent", hover_color=SURF2, text_color=ACCENT,
-                      font=F_SMALL, corner_radius=8,
-                      command=self._new_agent).pack(fill="x", pady=(4, 1))
-
-        if agents and not self.active_agent:
+        self._agents_by_name = {a["name"]: a for a in agents}
+        names = list(self._agents_by_name.keys()) or ["(no agents)"]
+        self.agent_menu.configure(values=names)
+        # Keep the current selection if it still exists, else pick the first.
+        if self.active_agent and self.active_agent["name"] in self._agents_by_name:
+            self._select_agent(self._agents_by_name[self.active_agent["name"]])
+        elif agents:
             self._select_agent(agents[0])
 
-    def _new_agent(self):
-        AgentDialog(self.root, on_save=self._save_agent)
+    def _on_agent_pick(self, name):
+        agent = self._agents_by_name.get(name)
+        if agent:
+            self._select_agent(agent)
 
-    def _edit_agent(self, agent):
-        AgentDialog(self.root, on_save=self._save_agent,
-                    on_delete=self._delete_agent, agent=agent)
-
-    def _save_agent(self, data):
-        agents = cfg.get("agents", [])
-        existing = next((a for a in agents if a["id"] == data["id"]), None)
-        if existing:
-            existing.update(data)
-        else:
-            agents.append(data)
-        cfg.set_key("agents", agents)
-        self._load_agents()
-
-    def _delete_agent(self, agent_id):
-        agents = [a for a in cfg.get("agents", []) if a["id"] != agent_id]
-        cfg.set_key("agents", agents)
-        if self.active_agent and self.active_agent["id"] == agent_id:
-            self.active_agent = None
-        self._load_agents()
+    def _edit_agents(self):
+        """Open the agent manager (add / edit / delete)."""
+        AgentManagerDialog(self.root, on_changed=self.reload_agents)
 
     def _select_agent(self, agent):
         self.active_agent = agent
         color = agent_color(agent)
         self.agent_icon_lbl.configure(text=agent["icon"], text_color=color)
-        self.agent_name_lbl.configure(text=agent["name"])
+        self.agent_var.set(agent["name"])
         self.agent_sub_lbl.configure(text=agent.get("desc", ""))
 
     def reload_agents(self):
         self._load_agents()
 
-    # ── History ────────────────────────────────────────────────────────────
+    # ── Projects ─────────────────────────────────────────────────────────────
+
+    def _refresh_projects(self):
+        projects = cfg.get("projects", [{"id": "general", "name": "General"}])
+        self._projects_by_name = {p["name"]: p for p in projects}
+        names = list(self._projects_by_name.keys())
+        self.project_menu.configure(values=names)
+        active = next((p for p in projects if p["id"] == self.active_project), projects[0])
+        self.active_project = active["id"]
+        self.project_var.set(active["name"])
+
+    def _on_project_change(self, name):
+        proj = self._projects_by_name.get(name)
+        if not proj:
+            return
+        self.active_project = proj["id"]
+        cfg.set_key("active_project", self.active_project)
+        # Switching project starts a fresh chat view scoped to it.
+        self._new_chat(save_current=True)
+        self._refresh_history()
+
+    def _manage_projects(self):
+        ProjectManagerDialog(self.root, on_changed=self._on_projects_changed)
+
+    def _on_projects_changed(self):
+        # The active project may have been deleted; fall back to general.
+        projects = cfg.get("projects", [])
+        if not any(p["id"] == self.active_project for p in projects):
+            self.active_project = "general"
+            cfg.set_key("active_project", "general")
+        self._refresh_projects()
+        self._refresh_history()
+
+    # ── History (chats) ──────────────────────────────────────────────────────
 
     def _refresh_history(self):
         for w in self.history_frame.winfo_children():
             w.destroy()
         query = self.history_search.get().strip() if hasattr(self, "history_search") else ""
-        convos = hist.search_conversations(query, limit=40) if query else hist.list_conversations(limit=30)
+        if query:
+            convos = hist.search_conversations(query, limit=40, project_id=self.active_project)
+        else:
+            convos = hist.list_conversations(limit=40, project_id=self.active_project)
         if not convos:
-            msg = "No matches" if query else "No history yet"
+            msg = "No matches" if query else "No chats yet"
             ctk.CTkLabel(self.history_frame, text=msg, font=F_SMALL,
                          text_color=MUTED).pack(pady=8)
             return
         for c in convos:
-            frame = ctk.CTkFrame(self.history_frame, fg_color="transparent", cursor="hand2")
+            is_current = c["filename"] == self.current_chat_file
+            frame = ctk.CTkFrame(self.history_frame,
+                                 fg_color=SURF2 if is_current else "transparent",
+                                 corner_radius=6)
             frame.pack(fill="x", pady=1)
+            frame.columnconfigure(0, weight=1)
             ctk.CTkButton(
-                frame, text=c["title"][:28], anchor="w", height=34,
+                frame, text=c["title"][:26], anchor="w", height=32,
                 fg_color="transparent", hover_color=SURF2,
-                text_color=MUTED, font=F_SMALL, corner_radius=6,
+                text_color=TEXT if is_current else MUTED, font=F_SMALL, corner_radius=6,
                 command=lambda fn=c["filename"]: self._load_history(fn),
-            ).pack(fill="x")
-            # When searching, show the matching snippet under the title.
+            ).grid(row=0, column=0, sticky="ew")
+            ctk.CTkButton(frame, text="✕", width=24, height=32, fg_color="transparent",
+                          hover_color=tint(DANGER, 0x33), text_color=MUTED, font=F_SMALL,
+                          command=lambda fn=c["filename"]: self._delete_chat(fn)).grid(row=0, column=1)
             if c.get("snippet"):
                 ctk.CTkLabel(frame, text=c["snippet"], font=("Segoe UI", 9),
                              text_color=MUTED, anchor="w", justify="left",
-                             wraplength=170).pack(fill="x", padx=12)
+                             wraplength=170).grid(row=1, column=0, columnspan=2, sticky="w", padx=10)
+
+    def _delete_chat(self, filename):
+        if not messagebox.askyesno("Delete chat", "Delete this chat permanently?"):
+            return
+        hist.delete_conversation(filename)
+        if filename == self.current_chat_file:
+            self._new_chat(save_current=False)
+        self._refresh_history()
 
     def _load_history(self, filename: str):
+        # Save the chat we're leaving (if it has unsaved content) first.
+        self._persist_current_chat()
         data = hist.load_conversation(filename)
         if not data:
             return
         self.history_msgs = data.get("messages", [])
+        self.current_chat_file = filename
         agent_id = data.get("agent_id", "assistant")
         agents = cfg.get("agents", [])
         agent = next((a for a in agents if a["id"] == agent_id), agents[0] if agents else None)
@@ -413,15 +521,36 @@ class ChatTab(ctk.CTkFrame):
                 self._append_msg("user", m["content"] if isinstance(m["content"], str) else str(m["content"]))
             elif m["role"] == "assistant":
                 self._append_msg("assistant", m["content"] if isinstance(m["content"], str) else str(m["content"]))
+        self._refresh_history()
 
-    def _save_and_clear(self):
-        if self.history_msgs:
-            hist.save_conversation(self.history_msgs, self.active_agent["id"] if self.active_agent else "assistant")
-            self._refresh_history()
+    def _persist_current_chat(self):
+        """Save the open conversation back to its file (or a new one), tagged
+        with the active project. Returns the filename, or None if empty."""
+        if not self.history_msgs:
+            return None
+        fn = hist.save_conversation(
+            self.history_msgs,
+            self.active_agent["id"] if self.active_agent else "assistant",
+            project_id=self.active_project,
+            filename=self.current_chat_file,
+        )
+        self.current_chat_file = fn
+        return fn
+
+    def _new_chat(self, save_current=True):
+        """Start a fresh chat in the current project, saving the open one."""
+        if save_current:
+            self._persist_current_chat()
         self.history_msgs = []
+        self.current_chat_file = None
         self.msg_box.configure(state="normal")
         self.msg_box.delete("1.0", "end")
         self.msg_box.configure(state="disabled")
+        self._refresh_history()
+
+    def _save_and_clear(self):
+        # Kept for the tray "new chat" action and the ↩ flow.
+        self._new_chat(save_current=True)
 
     # ── Export ─────────────────────────────────────────────────────────────
 
@@ -680,12 +809,11 @@ class ChatTab(ctk.CTkFrame):
             self._streaming = False
         self.tool_bar.grid_remove()
         self._set_busy(False)
-        # Auto-save if enabled
+        # Auto-save into the current chat file (tagged with the active project)
+        # so the sidebar updates and reopening continues the same chat.
         if cfg.get("auto_save_chats", True) and len(self.history_msgs) >= 2:
-            threading.Thread(target=lambda: hist.save_conversation(
-                self.history_msgs,
-                self.active_agent["id"] if self.active_agent else "assistant"
-            ), daemon=True).start()
+            self._persist_current_chat()
+            self._refresh_history()
         self.on_notify("ARIA", "Response ready")
 
     def _on_error(self, err):
@@ -910,6 +1038,167 @@ class TasksTab(ctk.CTkFrame):
     def on_task_done(self, task_id, name, result):
         self._running.discard(task_id)
         on_main(self.root, self._refresh)
+
+
+class ProjectManagerDialog(ctk.CTkToplevel):
+    """Add, rename, and delete projects. 'General' is protected."""
+
+    def __init__(self, master, on_changed):
+        super().__init__(master)
+        self.on_changed = on_changed
+        self.title("Manage Projects")
+        self.geometry("420x460")
+        self.configure(fg_color=SURFACE)
+        self.grab_set()
+        self._build()
+
+    def _build(self):
+        ctk.CTkLabel(self, text="📁 Projects", font=F_HEAD, text_color=TEXT
+                     ).pack(anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(self, text="Group related chats together.",
+                     font=F_SMALL, text_color=MUTED).pack(anchor="w", padx=20, pady=(0, 10))
+
+        self.list_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.list_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+        add = ctk.CTkFrame(self, fg_color=SURF2, corner_radius=10)
+        add.pack(fill="x", padx=14, pady=(0, 14))
+        add.columnconfigure(0, weight=1)
+        self.new_name = ctk.CTkEntry(add, placeholder_text="New project name", height=34, font=F_SMALL)
+        self.new_name.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        ctk.CTkButton(add, text="Add", width=70, height=34, fg_color=ACCENT,
+                      hover_color="#8aa5ff", text_color="white", font=F_SMALL,
+                      command=self._add).grid(row=0, column=1, padx=(0, 10))
+
+        self._refresh()
+
+    def _refresh(self):
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        for p in cfg.get("projects", []):
+            row = ctk.CTkFrame(self.list_frame, fg_color=SURF2, corner_radius=8)
+            row.pack(fill="x", pady=3)
+            row.columnconfigure(0, weight=1)
+            ctk.CTkLabel(row, text=p["name"], font=F_BODY, text_color=TEXT, anchor="w"
+                         ).grid(row=0, column=0, sticky="ew", padx=10, pady=8)
+            if p["id"] != "general":
+                ctk.CTkButton(row, text="Rename", width=70, height=28, fg_color=SURF3,
+                              hover_color=BORDER, text_color=TEXT, font=F_SMALL,
+                              command=lambda pr=p: self._rename(pr)).grid(row=0, column=1, padx=2)
+                ctk.CTkButton(row, text="✕", width=28, height=28, fg_color="transparent",
+                              hover_color=tint(DANGER, 0x33), text_color=DANGER, font=F_SMALL,
+                              command=lambda pr=p: self._delete(pr)).grid(row=0, column=2, padx=(2, 8))
+            else:
+                ctk.CTkLabel(row, text="default", font=F_SMALL, text_color=MUTED
+                             ).grid(row=0, column=1, padx=(0, 12))
+
+    def _add(self):
+        name = self.new_name.get().strip()
+        if not name:
+            return
+        projects = cfg.get("projects", [])
+        projects.append({"id": f"proj_{uuid.uuid4().hex[:8]}", "name": name})
+        cfg.set_key("projects", projects)
+        self.new_name.delete(0, "end")
+        self._refresh()
+        self.on_changed()
+
+    def _rename(self, proj):
+        dlg = ctk.CTkInputDialog(text=f"Rename '{proj['name']}' to:", title="Rename project")
+        new = dlg.get_input()
+        if new and new.strip():
+            projects = cfg.get("projects", [])
+            for p in projects:
+                if p["id"] == proj["id"]:
+                    p["name"] = new.strip()
+            cfg.set_key("projects", projects)
+            self._refresh()
+            self.on_changed()
+
+    def _delete(self, proj):
+        if not messagebox.askyesno(
+                "Delete project",
+                f"Delete '{proj['name']}'? Its chats stay saved but become "
+                "ungrouped (moved to General)."):
+            return
+        projects = [p for p in cfg.get("projects", []) if p["id"] != proj["id"]]
+        cfg.set_key("projects", projects)
+        self._refresh()
+        self.on_changed()
+
+
+class AgentManagerDialog(ctk.CTkToplevel):
+    """List agents with edit/delete, and a button to create new ones."""
+
+    def __init__(self, master, on_changed):
+        super().__init__(master)
+        self.on_changed = on_changed
+        self.title("Manage Agents")
+        self.geometry("440x500")
+        self.configure(fg_color=SURFACE)
+        self.grab_set()
+        self._build()
+
+    def _build(self):
+        ctk.CTkLabel(self, text="🤖 Agents", font=F_HEAD, text_color=TEXT
+                     ).pack(anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(self, text="Each agent has its own system prompt and style.",
+                     font=F_SMALL, text_color=MUTED).pack(anchor="w", padx=20, pady=(0, 10))
+
+        self.list_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.list_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+        ctk.CTkButton(self, text="＋  New agent", height=38, fg_color=ACCENT,
+                      hover_color="#8aa5ff", text_color="white", font=F_BOLD,
+                      command=self._new).pack(fill="x", padx=14, pady=(0, 14))
+        self._refresh()
+
+    def _refresh(self):
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        for agent in cfg.get("agents", []):
+            row = ctk.CTkFrame(self.list_frame, fg_color=SURF2, corner_radius=8)
+            row.pack(fill="x", pady=3)
+            row.columnconfigure(1, weight=1)
+            ctk.CTkLabel(row, text=agent.get("icon", "✦"), font=("Segoe UI", 18),
+                         text_color=agent_color(agent), width=34
+                         ).grid(row=0, column=0, padx=(8, 0), pady=8)
+            ctk.CTkLabel(row, text=agent["name"], font=F_BOLD, text_color=TEXT, anchor="w"
+                         ).grid(row=0, column=1, sticky="ew", padx=6)
+            ctk.CTkButton(row, text="Edit", width=60, height=28, fg_color=SURF3,
+                          hover_color=BORDER, text_color=TEXT, font=F_SMALL,
+                          command=lambda a=agent: self._edit(a)).grid(row=0, column=2, padx=2)
+            if not agent.get("builtin"):
+                ctk.CTkButton(row, text="✕", width=28, height=28, fg_color="transparent",
+                              hover_color=tint(DANGER, 0x33), text_color=DANGER, font=F_SMALL,
+                              command=lambda a=agent: self._delete(a)).grid(row=0, column=3, padx=(2, 8))
+
+    def _new(self):
+        AgentDialog(self, on_save=self._save)
+
+    def _edit(self, agent):
+        AgentDialog(self, on_save=self._save, on_delete=self._delete_id, agent=agent)
+
+    def _save(self, data):
+        agents = cfg.get("agents", [])
+        existing = next((a for a in agents if a["id"] == data["id"]), None)
+        if existing:
+            existing.update(data)
+        else:
+            agents.append(data)
+        cfg.set_key("agents", agents)
+        self._refresh()
+        self.on_changed()
+
+    def _delete(self, agent):
+        if messagebox.askyesno("Delete agent", f"Delete '{agent['name']}'?"):
+            self._delete_id(agent["id"])
+
+    def _delete_id(self, agent_id):
+        agents = [a for a in cfg.get("agents", []) if a["id"] != agent_id]
+        cfg.set_key("agents", agents)
+        self._refresh()
+        self.on_changed()
 
 
 class AgentDialog(ctk.CTkToplevel):

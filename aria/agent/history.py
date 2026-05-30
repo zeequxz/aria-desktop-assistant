@@ -21,8 +21,11 @@ def save_conversation(
     messages: list,
     agent_id: str,
     title: Optional[str] = None,
+    project_id: str = "general",
+    filename: Optional[str] = None,
 ) -> str:
-    """Save a conversation. Returns the filename."""
+    """Save a conversation. Returns the filename. If `filename` is given, the
+    existing chat is overwritten (so editing a loaded chat doesn't duplicate)."""
     if not messages:
         return ""
     # Auto-generate title from first user message
@@ -35,13 +38,15 @@ def save_conversation(
         else:
             title = "Conversation"
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{timestamp}_{agent_id}.json"
+    if not filename:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_{agent_id}.json"
     path = HISTORY_DIR / filename
 
     data = {
         "title": title,
         "agent_id": agent_id,
+        "project_id": project_id,
         "timestamp": datetime.now().isoformat(),
         "message_count": len(messages),
         "messages": messages,
@@ -53,33 +58,43 @@ def save_conversation(
     return filename
 
 
-def list_conversations(limit: int = 50) -> list:
-    """List recent conversations, newest first."""
-    files = sorted(HISTORY_DIR.glob("*.json"), reverse=True)[:limit]
+def list_conversations(limit: int = 50, project_id: Optional[str] = None) -> list:
+    """List recent conversations, newest first. If project_id is given, only
+    chats in that project are returned (chats with no project_id count as
+    'general')."""
+    files = sorted(HISTORY_DIR.glob("*.json"), reverse=True)
     results = []
     for f in files:
         try:
             with open(f, "r", encoding="utf-8") as fp:
                 data = json.load(fp)
+            pid = data.get("project_id", "general")
+            if project_id is not None and pid != project_id:
+                continue
             results.append({
                 "filename": f.name,
                 "title": data.get("title", f.stem),
                 "agent_id": data.get("agent_id", "assistant"),
+                "project_id": pid,
                 "timestamp": data.get("timestamp", ""),
                 "message_count": data.get("message_count", 0),
             })
         except Exception:
             continue
+        if len(results) >= limit:
+            break
     return results
 
 
-def search_conversations(query: str, limit: int = 50) -> list:
+def search_conversations(query: str, limit: int = 50,
+                         project_id: Optional[str] = None) -> list:
     """Full-text search across saved conversations. Returns matches newest
     first; each result has the same keys as list_conversations() plus 'snippet'.
-    Matches on the title and on message text (string or block content)."""
+    Matches on the title and on message text (string or block content).
+    If project_id is given, only chats in that project are searched."""
     q = (query or "").strip().lower()
     if not q:
-        return list_conversations(limit)
+        return list_conversations(limit, project_id=project_id)
 
     files = sorted(HISTORY_DIR.glob("*.json"), reverse=True)
     results = []
@@ -88,6 +103,10 @@ def search_conversations(query: str, limit: int = 50) -> list:
             with open(f, "r", encoding="utf-8") as fp:
                 data = json.load(fp)
         except Exception:
+            continue
+
+        pid = data.get("project_id", "general")
+        if project_id is not None and pid != project_id:
             continue
 
         title = data.get("title", f.stem)
@@ -108,6 +127,7 @@ def search_conversations(query: str, limit: int = 50) -> list:
                 "filename": f.name,
                 "title": title,
                 "agent_id": data.get("agent_id", "assistant"),
+                "project_id": pid,
                 "timestamp": data.get("timestamp", ""),
                 "message_count": data.get("message_count", 0),
                 "snippet": snippet,

@@ -41,6 +41,10 @@ DEFAULTS = {
     "max_tokens": 4096,
     "auto_check_updates": True,
     "github_repo": "",
+    # Projects group related chats (like Codex/Claude). Every chat belongs to
+    # one. "general" always exists as the default.
+    "projects": [{"id": "general", "name": "General"}],
+    "active_project": "general",
     "prompt_library": [
         {"name": "Summarize", "text": "Summarize the following clearly and concisely:\n\n"},
         {"name": "Improve writing", "text": "Improve and rewrite the following text. Keep my tone:\n\n"},
