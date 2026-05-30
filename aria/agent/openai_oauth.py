@@ -118,6 +118,33 @@ def is_signed_in() -> bool:
     return load_tokens() is not None
 
 
+def _decode_jwt_claims(token: str) -> dict:
+    """Decode a JWT payload WITHOUT verifying the signature (we only need the
+    claims to read the account id; the token is already trusted, it's ours)."""
+    try:
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)  # restore padding
+        return json.loads(base64.urlsafe_b64decode(payload_b64))
+    except Exception:
+        return {}
+
+
+def get_account_id() -> Optional[str]:
+    """Extract the ChatGPT account id the Codex backend requires, from the
+    'https://api.openai.com/auth' claim of the id_token (falling back to the
+    access_token, which is also a JWT carrying the same claim)."""
+    tokens = load_tokens()
+    if not tokens:
+        return None
+    for key in ("id_token", "access_token"):
+        claims = _decode_jwt_claims(tokens.get(key, "") or "")
+        auth = claims.get("https://api.openai.com/auth", {})
+        acct = auth.get("chatgpt_account_id")
+        if acct:
+            return acct
+    return None
+
+
 # ── Token exchange / refresh ─────────────────────────────────────────────────
 
 def _post_token(payload: dict) -> dict:

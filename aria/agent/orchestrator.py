@@ -186,28 +186,27 @@ class AgentOrchestrator:
     # ── OpenAI ─────────────────────────────────────────────────────────────
 
     def _run_openai(self, messages, system_prompt, use_computer, use_browser, s):
+        all_tools, schemas = _build_tool_registry(use_computer, use_browser)
+        model = s.get("openai_model", "gpt-4o")
+
+        # "Sign in with ChatGPT" (Codex OAuth) does NOT use the OpenAI SDK or
+        # api.openai.com — it speaks the Responses API at the Cloudflare-guarded
+        # ChatGPT backend, which needs Codex-specific headers. Delegate to the
+        # dedicated client; it runs its own tool loop via this orchestrator.
+        if s.get("openai_auth_mode") == "oauth":
+            from agent import codex_backend
+            codex_backend.run(self, messages, system_prompt, all_tools, schemas,
+                              model, MAX_ITERATIONS)
+            return
+
         if not OPENAI_AVAILABLE:
             self.on_error("openai not installed. Run: pip install openai")
             return
-
-        # Two auth modes: a normal platform API key, or "Sign in with ChatGPT"
-        # (Codex OAuth), which sends the subscription bearer token to the
-        # ChatGPT backend base URL instead of api.openai.com.
-        if s.get("openai_auth_mode") == "oauth":
-            from agent import openai_oauth
-            token = openai_oauth.get_access_token()
-            if not token:
-                self.on_error("Not signed in with ChatGPT. Go to Settings → Sign in.")
-                return
-            client = openai.OpenAI(api_key=token, base_url=openai_oauth.CHATGPT_BASE_URL)
-        else:
-            api_key = s.get("openai_api_key", "")
-            if not api_key:
-                self.on_error("No OpenAI API key. Go to Settings.")
-                return
-            client = openai.OpenAI(api_key=api_key)
-        model = s.get("openai_model", "gpt-4o")
-        all_tools, schemas = _build_tool_registry(use_computer, use_browser)
+        api_key = s.get("openai_api_key", "")
+        if not api_key:
+            self.on_error("No OpenAI API key. Go to Settings.")
+            return
+        client = openai.OpenAI(api_key=api_key)
 
         def to_oai(schema):
             return {"type": "function", "function": {"name": schema["name"], "description": schema["description"], "parameters": schema["input_schema"]}}
