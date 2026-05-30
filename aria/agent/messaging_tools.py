@@ -25,11 +25,21 @@ def send_telegram_message(text: str) -> dict:
     return {"sent": svc.send_telegram(text)}
 
 
-def send_discord_message(text: str) -> dict:
+def send_discord_message(text: str, channel: str = None) -> dict:
     svc = _svc()
     if not svc:
         return {"error": "Messaging service not running."}
-    return {"sent": svc.send_discord(text)}
+    names = svc.discord_channel_names()
+    if channel and channel not in names:
+        return {"error": f"Unknown Discord channel '{channel}'. Available: {names}"}
+    return {"sent": svc.send_discord(text, channel=channel), "channel": channel or "all"}
+
+
+def list_discord_channels() -> dict:
+    svc = _svc()
+    if not svc:
+        return {"error": "Messaging service not running."}
+    return {"channels": svc.discord_channel_names()}
 
 
 def notify_user(text: str) -> dict:
@@ -54,6 +64,7 @@ def ask_user(question: str, wait_minutes: int = 10) -> dict:
 MESSAGING_TOOLS = {
     "send_telegram_message": send_telegram_message,
     "send_discord_message": send_discord_message,
+    "list_discord_channels": list_discord_channels,
     "notify_user": notify_user,
     "ask_user": ask_user,
 }
@@ -71,13 +82,27 @@ MESSAGING_TOOL_SCHEMAS = [
     },
     {
         "name": "send_discord_message",
-        "description": "Post a message to the user's configured Discord channel "
-                       "(via webhook). Good for news digests or status updates.",
+        "description": "Post a message to a Discord channel (via webhook). The "
+                       "user can configure several named channels for different "
+                       "topics; pass `channel` to target one, or omit it to post "
+                       "to all. Call list_discord_channels first if unsure of the "
+                       "names. Good for news digests or status updates.",
         "input_schema": {
             "type": "object",
-            "properties": {"text": {"type": "string", "description": "Message body."}},
+            "properties": {
+                "text": {"type": "string", "description": "Message body."},
+                "channel": {"type": "string",
+                            "description": "Name of the configured Discord channel to "
+                                           "post to. Omit to post to all channels."},
+            },
             "required": ["text"],
         },
+    },
+    {
+        "name": "list_discord_channels",
+        "description": "List the names of the Discord channels the user has "
+                       "configured, so you can pick the right one to post to.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "notify_user",

@@ -2113,13 +2113,27 @@ class SettingsTab(ctk.CTkScrollableFrame):
                      font=F_SMALL, text_color=MUTED, justify="left",
                      wraplength=560).pack(anchor="w", pady=(0, 10))
 
-        lbl("Discord webhook URL  (send-only)")
+        lbl("Discord webhook URL  (default channel, send-only)")
         self.discord_webhook = ctk.StringVar(value=s.get("discord_webhook_url", ""))
         ctk.CTkEntry(self, textvariable=self.discord_webhook, height=38, font=F_BODY,
                      placeholder_text="https://discord.com/api/webhooks/...").pack(fill="x", pady=(4, 6))
         ctk.CTkButton(self, text="Send test message", width=160, height=32, fg_color=SURF2,
                       hover_color=BORDER, text_color=TEXT, font=F_SMALL,
-                      command=self._test_discord).pack(anchor="w", pady=(0, 14))
+                      command=self._test_discord).pack(anchor="w", pady=(0, 8))
+
+        lbl("Extra Discord channels  (one per line:  name = webhook URL)")
+        ctk.CTkLabel(self, text="Add a webhook for each channel/topic. The agent "
+                                "can post to a specific one by name "
+                                "(e.g. \"post the news to the 'tech' channel\").",
+                     font=F_SMALL, text_color=MUTED, justify="left",
+                     wraplength=560).pack(anchor="w", pady=(0, 4))
+        self.discord_channels_box = ctk.CTkTextbox(self, height=90, font=F_SMALL,
+                                                   fg_color=SURF2, text_color=TEXT, border_width=0)
+        self.discord_channels_box.pack(fill="x", pady=(0, 14))
+        existing = "\n".join(f"{c.get('name','')} = {c.get('url','')}"
+                             for c in s.get("discord_channels", []))
+        if existing:
+            self.discord_channels_box.insert("end", existing)
 
         ctk.CTkButton(self, text="Save Settings", height=44, fg_color=ACCENT,
                       hover_color="#8aa5ff", text_color="white", font=F_BOLD,
@@ -2145,6 +2159,17 @@ class SettingsTab(ctk.CTkScrollableFrame):
         s["github_repo"] = self.github_repo.get().strip()
         s["telegram_bot_token"] = self.telegram_token.get().strip()
         s["discord_webhook_url"] = self.discord_webhook.get().strip()
+        # Parse "name = url" lines into the named-channels list.
+        chans = []
+        for line in self.discord_channels_box.get("1.0", "end").splitlines():
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            name, url = line.split("=", 1)
+            name, url = name.strip(), url.strip()
+            if name and url:
+                chans.append({"name": name, "url": url})
+        s["discord_channels"] = chans
         # Parse the comma-separated allowlist into a clean list of id strings.
         s["telegram_allowlist"] = [c.strip() for c in self.telegram_allow.get().split(",") if c.strip()]
         theme_changed = s.get("theme") != self.theme_var.get()

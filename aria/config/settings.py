@@ -38,6 +38,9 @@ DEFAULTS = {
     # with each sender's id so you can add it here).
     "telegram_allowlist": [],
     "discord_webhook_url": "",
+    # Named Discord channels (each is a webhook): [{"name": ..., "url": ...}].
+    # Lets the agent post to different channels for different topics.
+    "discord_channels": [],
     # When False, inbound messages can chat/search/browse but NOT control the
     # mouse/keyboard — a quick way to revoke remote PC control temporarily.
     "messaging_allow_computer_use": True,

@@ -175,14 +175,43 @@ class MessagingService:
             ok = ok or bool(res and res.get("ok"))
         return ok
 
-    def send_discord(self, text: str) -> bool:
-        webhook = cfg.get("discord_webhook_url", "")
-        if not webhook:
+    def _discord_webhooks(self) -> dict:
+        """Map of channel-name -> webhook URL. Includes the legacy single
+        webhook as a channel named 'default' for backward compatibility."""
+        hooks = {}
+        legacy = cfg.get("discord_webhook_url", "")
+        if legacy:
+            hooks["default"] = legacy
+        for ch in cfg.get("discord_channels", []):
+            name = (ch.get("name") or "").strip()
+            url = (ch.get("url") or "").strip()
+            if name and url:
+                hooks[name] = url
+        return hooks
+
+    def discord_channel_names(self) -> list:
+        return list(self._discord_webhooks().keys())
+
+    def send_discord(self, text: str, channel: str = None) -> bool:
+        """Post to a named Discord channel. If `channel` is None, post to every
+        configured channel (or, if only the legacy one exists, just that)."""
+        hooks = self._discord_webhooks()
+        if not hooks:
             return False
-        res = _post_json(webhook, {"content": text[:1900]}, timeout=20)
-        # Discord webhooks return 204 No Content on success (res == {} via our
-        # helper); treat a non-None result as success.
-        return res is not None
+        if channel:
+            url = hooks.get(channel)
+            if not url:
+                return False
+            targets = [url]
+        else:
+            targets = list(hooks.values())
+        ok = False
+        for url in targets:
+            # Discord webhooks return 204 No Content on success (res == {} via
+            # our helper); treat a non-None result as success.
+            res = _post_json(url, {"content": text[:1900]}, timeout=20)
+            ok = ok or (res is not None)
+        return ok
 
     def notify(self, text: str) -> bool:
         """Push to every configured channel (Telegram allowlist + Discord)."""
