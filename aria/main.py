@@ -3013,16 +3013,16 @@ class SettingsTab(ctk.CTkScrollableFrame):
         ).pack(fill="x", pady=(4, 12))
 
         # ── Voice (text-to-speech) ──────────────────────────────────────────
+        # Note: this section runs before _check_vars is created (Behaviour
+        # section), so TTS uses its own dedicated vars.
         section("Voice (text-to-speech)")
         from agent import tts as _tts
 
-        self._check_vars["tts_enabled"] = ctk.BooleanVar(
-            value=s.get("tts_enabled", False)
-        )
+        self.tts_enabled_var = ctk.BooleanVar(value=s.get("tts_enabled", False))
         ctk.CTkCheckBox(
             self,
             text="Speak replies aloud",
-            variable=self._check_vars["tts_enabled"],
+            variable=self.tts_enabled_var,
             font=F_BODY,
             text_color=TEXT,
         ).pack(anchor="w", pady=(0, 8))
@@ -3328,6 +3328,7 @@ class SettingsTab(ctk.CTkScrollableFrame):
             "telegram_allow": self.telegram_allow.get(),
             "discord_webhook": self.discord_webhook.get(),
             "discord_channels": self.discord_channels_box.get("1.0", "end"),
+            "tts_enabled": self.tts_enabled_var.get(),
             "tts_voice": self.tts_voice_var.get(),
             "tts_rate": self.tts_rate_var.get(),
         }
@@ -3407,6 +3408,7 @@ class SettingsTab(ctk.CTkScrollableFrame):
         theme_changed = s.get("theme") != self.theme_var.get()
         s["theme"] = self.theme_var.get()
         # Voice (text-to-speech)
+        s["tts_enabled"] = self.tts_enabled_var.get()
         s["tts_voice"] = self._tts_voice_map.get(self.tts_voice_var.get(), "")
         try:
             s["tts_rate"] = int(self.tts_rate_var.get())
