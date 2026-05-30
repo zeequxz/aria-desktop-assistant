@@ -2080,7 +2080,15 @@ class SettingsTab(ctk.CTkScrollableFrame):
         self._check_vars["messaging_enabled"] = ctk.BooleanVar(value=s.get("messaging_enabled", False))
         ctk.CTkCheckBox(self, text="Enable messaging channels",
                         variable=self._check_vars["messaging_enabled"],
-                        font=F_BODY, text_color=TEXT).pack(anchor="w", pady=(0, 8))
+                        font=F_BODY, text_color=TEXT).pack(anchor="w", pady=(0, 4))
+
+        self._check_vars["messaging_allow_computer_use"] = ctk.BooleanVar(
+            value=s.get("messaging_allow_computer_use", True))
+        ctk.CTkCheckBox(self, text="Allow remote messages to control the PC "
+                                   "(mouse/keyboard). Uncheck to limit them to "
+                                   "chat, search & browsing.",
+                        variable=self._check_vars["messaging_allow_computer_use"],
+                        font=F_SMALL, text_color=TEXT).pack(anchor="w", pady=(0, 8))
 
         lbl("Telegram bot token  (from @BotFather)")
         self.telegram_token = ctk.StringVar(value=s.get("telegram_bot_token", ""))
@@ -2355,11 +2363,13 @@ class ARIAApp(ctk.CTk):
 
     def _run_agent_for_messaging(self, prompt: str) -> str:
         """Run the agent for an inbound Telegram message. Uses the first agent's
-        system prompt and allows all tools (computer use included)."""
+        system prompt. Computer use is gated by the messaging toggle so PC
+        control can be revoked for remote messages without disabling chat."""
         agents = cfg.get("agents", [])
         system = agents[0]["system"] if agents else "You are a helpful assistant."
+        allow_pc = cfg.get("messaging_allow_computer_use", True)
         return run_agent_sync(prompt, system_prompt=system,
-                              use_computer_tools=True, use_browser_tools=True)
+                              use_computer_tools=allow_pc, use_browser_tools=True)
 
     def _setup_hotkey(self):
         """Register global hotkey Ctrl+Shift+Space to show ARIA."""

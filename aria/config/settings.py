@@ -38,6 +38,9 @@ DEFAULTS = {
     # with each sender's id so you can add it here).
     "telegram_allowlist": [],
     "discord_webhook_url": "",
+    # When False, inbound messages can chat/search/browse but NOT control the
+    # mouse/keyboard — a quick way to revoke remote PC control temporarily.
+    "messaging_allow_computer_use": True,
     "computer_use_enabled": False,
     "screenshot_interval": 2,
     "theme": "dark",
