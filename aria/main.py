@@ -1639,8 +1639,12 @@ class SettingsTab(ctk.CTkScrollableFrame):
         lbl("OpenAI model")
         self.openai_model = ctk.StringVar(value=s.get("openai_model","gpt-4o"))
         ctk.CTkComboBox(self, variable=self.openai_model, height=38, font=F_BODY,
-                        values=["gpt-4o","gpt-4-turbo","gpt-3.5-turbo"],
+                        values=["gpt-4o","gpt-4-turbo","gpt-3.5-turbo",
+                                "gpt-5.5-codex","gpt-5.5"],
                         dropdown_fg_color=SURF2).pack(fill="x", pady=(4,12))
+        ctk.CTkLabel(self, text="ChatGPT sign-in needs a gpt-5.x / -codex model "
+                                "(legacy ones fall back to gpt-5.5-codex).",
+                     font=F_SMALL, text_color=MUTED, justify="left").pack(anchor="w", pady=(0, 8))
 
         lbl("Local model (Ollama)")
         self.local_model = ctk.StringVar(value=s.get("ollama_model","llama3"))
