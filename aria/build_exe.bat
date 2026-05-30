@@ -38,26 +38,10 @@ ping -n 2 127.0.0.1 >nul
 :: Try to clear the old dist\ARIA. Right after a build, Windows Defender (or an
 :: open Explorer window) can briefly lock this folder, which makes PyInstaller's
 :: COLLECT step fail. Retry a few times; if it stays locked, build into a fresh
-:: folder instead so the build still succeeds.
+:: folder instead so the build still succeeds. (Done in a subroutine because
+:: goto labels are not allowed inside a parenthesized if-block.)
 set "OUTDIR=dist"
-if exist "dist\ARIA" (
-    echo  [*] Clearing old dist\ARIA...
-    set /a tries=0
-    :rmloop
-    rmdir /s /q "dist\ARIA" >nul 2>&1
-    if not exist "dist\ARIA" goto rmdone
-    set /a tries+=1
-    if !tries! geq 5 goto rmlocked
-    echo      still locked, retrying (!tries!/5)...
-    ping -n 4 127.0.0.1 >nul
-    goto rmloop
-    :rmlocked
-    echo  [!] dist\ARIA is locked (close any Explorer window open on it).
-    echo      Building into dist_build\ instead.
-    set "OUTDIR=dist_build"
-    rmdir /s /q "dist_build" >nul 2>&1
-    :rmdone
-)
+if exist "dist\ARIA" call :clear_dist
 
 echo  [*] Building ARIA.exe...
 echo      This takes 2-5 minutes. Please wait.
@@ -87,3 +71,23 @@ echo   Users double-click ARIA.exe to launch.
 echo   No Python installation required!
 echo.
 pause
+exit /b 0
+
+:: ── Subroutine: clear dist\ARIA, falling back to dist_build\ if locked ───────
+:clear_dist
+echo  [*] Clearing old dist\ARIA...
+set /a tries=0
+:clear_loop
+rmdir /s /q "dist\ARIA" >nul 2>&1
+if not exist "dist\ARIA" goto :eof
+set /a tries+=1
+if !tries! geq 5 (
+    echo  [!] dist\ARIA is locked (close any Explorer window open on it).
+    echo      Building into dist_build\ instead.
+    set "OUTDIR=dist_build"
+    rmdir /s /q "dist_build" >nul 2>&1
+    goto :eof
+)
+echo      still locked, retrying (!tries!/5)...
+ping -n 4 127.0.0.1 >nul
+goto clear_loop
