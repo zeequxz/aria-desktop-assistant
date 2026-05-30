@@ -39,6 +39,7 @@ DEFAULT_REPO = "zeequxz/aria-desktop-assistant"
 
 # ── Version helpers ──────────────────────────────────────────────────────────
 
+
 def get_current_version() -> str:
     return CURRENT_VERSION
 
@@ -81,6 +82,7 @@ def install_dir() -> Path:
 
 # ── Checking ─────────────────────────────────────────────────────────────────
 
+
 def check_for_updates(
     on_update_available: Callable[[dict], None],
     on_up_to_date: Optional[Callable[[], None]] = None,
@@ -92,18 +94,35 @@ def check_for_updates(
     ``info`` has keys: version, notes, html_url, asset_url, asset_name.
     Otherwise calls ``on_up_to_date`` / ``on_error`` if provided.
     """
+
     def worker():
         api = f"https://api.github.com/repos/{_repo()}/releases/latest"
         try:
-            req = urllib.request.Request(api, headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "ARIA-Updater",
-            })
+            req = urllib.request.Request(
+                api,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "ARIA-Updater",
+                },
+            )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if on_error:
-                on_error(f"GitHub returned HTTP {e.code}. Check the repo name in Settings.")
+                if e.code == 404:
+                    # /releases/latest 404s both when the repo is wrong AND when
+                    # the repo simply has no published releases yet. Point at the
+                    # more common cause.
+                    on_error(
+                        f"No published releases found for '{repo}'. "
+                        "Publish a GitHub Release (or check the repo name in Settings)."
+                    )
+                elif e.code == 403:
+                    on_error("GitHub rate limit hit. Try again in a few minutes.")
+                else:
+                    on_error(
+                        f"GitHub returned HTTP {e.code}. Check the repo name in Settings."
+                    )
             return
         except Exception as e:
             if on_error:
@@ -130,18 +149,21 @@ def check_for_updates(
                 asset_name = name
                 break
 
-        on_update_available({
-            "version": latest.lstrip("vV"),
-            "notes": data.get("body", "") or "",
-            "html_url": data.get("html_url", ""),
-            "asset_url": asset_url,
-            "asset_name": asset_name,
-        })
+        on_update_available(
+            {
+                "version": latest.lstrip("vV"),
+                "notes": data.get("body", "") or "",
+                "html_url": data.get("html_url", ""),
+                "asset_url": asset_url,
+                "asset_name": asset_name,
+            }
+        )
 
     threading.Thread(target=worker, daemon=True).start()
 
 
 # ── Downloading & applying ───────────────────────────────────────────────────
+
 
 def download_and_apply(
     info: dict,
@@ -154,17 +176,22 @@ def download_and_apply(
     When staging succeeds, ``on_ready()`` is called; the caller should then quit
     the app so the helper script can swap the files in and relaunch.
     """
+
     def worker():
         asset_url = info.get("asset_url")
         if not asset_url:
             if on_error:
-                on_error("This release has no downloadable .zip asset. "
-                         "Use 'Open release page' to update manually.")
+                on_error(
+                    "This release has no downloadable .zip asset. "
+                    "Use 'Open release page' to update manually."
+                )
             return
         if not is_frozen():
             if on_error:
-                on_error("Self-update only works in the packaged app. "
-                         "Running from source: pull the new code instead.")
+                on_error(
+                    "Self-update only works in the packaged app. "
+                    "Running from source: pull the new code instead."
+                )
             return
 
         try:
@@ -172,7 +199,9 @@ def download_and_apply(
             zip_path = tmp / (info.get("asset_name") or "update.zip")
 
             # Download with coarse progress reporting.
-            req = urllib.request.Request(asset_url, headers={"User-Agent": "ARIA-Updater"})
+            req = urllib.request.Request(
+                asset_url, headers={"User-Agent": "ARIA-Updater"}
+            )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 total = int(resp.headers.get("Content-Length", 0))
                 read = 0

@@ -59,10 +59,22 @@ DEFAULTS = {
     "projects": [{"id": "general", "name": "General"}],
     "active_project": "general",
     "prompt_library": [
-        {"name": "Summarize", "text": "Summarize the following clearly and concisely:\n\n"},
-        {"name": "Improve writing", "text": "Improve and rewrite the following text. Keep my tone:\n\n"},
-        {"name": "Explain simply", "text": "Explain the following in simple terms:\n\n"},
-        {"name": "Find bugs", "text": "Review this code and list any bugs or issues:\n\n"},
+        {
+            "name": "Summarize",
+            "text": "Summarize the following clearly and concisely:\n\n",
+        },
+        {
+            "name": "Improve writing",
+            "text": "Improve and rewrite the following text. Keep my tone:\n\n",
+        },
+        {
+            "name": "Explain simply",
+            "text": "Explain the following in simple terms:\n\n",
+        },
+        {
+            "name": "Find bugs",
+            "text": "Review this code and list any bugs or issues:\n\n",
+        },
     ],
     "tasks": [],
     "agents": [
