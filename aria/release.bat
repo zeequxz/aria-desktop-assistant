@@ -39,12 +39,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: ── Zip dist\ARIA into release\ARIA-v<version>.zip ───────────────────────────
-if not exist "dist\ARIA\ARIA.exe" (
-    echo  [!] dist\ARIA\ARIA.exe not found; build may have failed.
+:: ── Locate the build. build_exe.bat normally produces dist\ARIA, but falls
+:: back to dist_build\ARIA when dist\ARIA is locked. Use whichever exists.
+set "BUILT="
+if exist "dist\ARIA\ARIA.exe" set "BUILT=dist\ARIA"
+if not defined BUILT if exist "dist_build\ARIA\ARIA.exe" set "BUILT=dist_build\ARIA"
+if not defined BUILT (
+    echo  [!] Could not find a built ARIA.exe in dist\ or dist_build\.
     pause
     exit /b 1
 )
+echo  [*] Using build at: %BUILT%
 
 if not exist "release" mkdir "release"
 set "ZIP=release\ARIA-v%VERSION%.zip"
@@ -52,9 +57,9 @@ if exist "%ZIP%" del "%ZIP%"
 
 echo.
 echo  [*] Packaging %ZIP% ...
-:: Use PowerShell's Compress-Archive. Zipping dist\ARIA\* keeps ARIA.exe at the
-:: root of the zip, which is what the in-app updater expects.
-powershell -NoProfile -Command "Compress-Archive -Path 'dist\ARIA\*' -DestinationPath '%ZIP%' -Force"
+:: Zipping the build's contents keeps ARIA.exe at the root of the zip, which is
+:: what the in-app updater expects.
+powershell -NoProfile -Command "Compress-Archive -Path '%BUILT%\*' -DestinationPath '%ZIP%' -Force"
 if errorlevel 1 (
     echo  [!] Packaging failed.
     pause

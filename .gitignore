@@ -17,6 +17,7 @@ ENV/
 # GitHub Release assets instead of being committed.
 build/
 dist/
+dist_build/
 release/
 *.manifest
 *.zip
