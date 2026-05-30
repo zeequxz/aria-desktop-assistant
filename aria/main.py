@@ -1338,6 +1338,22 @@ class TasksTab(ctk.CTkFrame):
             command=lambda t=task: self._run(t),
         ).pack(pady=2)
 
+        edit_btn = ctk.CTkButton(
+            btns,
+            text="✎",
+            width=30,
+            height=26,
+            fg_color=SURF2,
+            hover_color=BORDER,
+            text_color=TEXT,
+            border_color=BORDER,
+            border_width=1,
+            font=F_SMALL,
+            command=lambda t=task: self._edit(t),
+        )
+        edit_btn.pack(pady=2)
+        Tooltip(edit_btn, "Edit this task")
+
         ctk.CTkButton(
             btns,
             text="✕",
@@ -1931,12 +1947,13 @@ class PromptLibraryDialog(ctk.CTkToplevel):
 
 
 class TaskDialog(ctk.CTkToplevel):
-    def __init__(self, master, on_save, preset_date=None):
+    def __init__(self, master, on_save, preset_date=None, task=None):
         super().__init__(master)
         self.on_save = on_save
         # When opened from the calendar, default to a one-off task on that date.
         self.preset_date = preset_date
-        self.title("New Task")
+        self.task = task  # existing task dict when editing, else None
+        self.title("Edit Task" if task else "New Task")
         self.geometry("520x600")
         self.resizable(False, False)
         self.configure(fg_color=SURFACE)
@@ -1944,9 +1961,13 @@ class TaskDialog(ctk.CTkToplevel):
         self._build()
 
     def _build(self):
-        ctk.CTkLabel(self, text="New Task", font=F_HEAD, text_color=TEXT).pack(
-            anchor="w", padx=20, pady=(18, 4)
-        )
+        t = self.task or {}
+        ctk.CTkLabel(
+            self,
+            text="Edit Task" if self.task else "New Task",
+            font=F_HEAD,
+            text_color=TEXT,
+        ).pack(anchor="w", padx=20, pady=(18, 4))
         ctk.CTkLabel(
             self,
             text="Tasks can run on a schedule automatically.",
@@ -1957,7 +1978,7 @@ class TaskDialog(ctk.CTkToplevel):
         ctk.CTkLabel(self, text="Task name", font=F_BOLD, text_color=TEXT).pack(
             anchor="w", padx=20
         )
-        self.name_var = ctk.StringVar()
+        self.name_var = ctk.StringVar(value=t.get("name", ""))
         ctk.CTkEntry(
             self,
             textvariable=self.name_var,
@@ -1978,6 +1999,8 @@ class TaskDialog(ctk.CTkToplevel):
             border_width=0,
         )
         self.prompt_box.pack(fill="x", padx=20, pady=(4, 14))
+        if t.get("prompt"):
+            self.prompt_box.insert("end", t["prompt"])
 
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", padx=20, pady=(0, 12))
@@ -1986,7 +2009,9 @@ class TaskDialog(ctk.CTkToplevel):
         ctk.CTkLabel(row, text="Schedule", font=F_BOLD, text_color=TEXT).grid(
             row=0, column=0, sticky="w"
         )
-        self.interval_var = ctk.StringVar(value="once" if self.preset_date else "none")
+        self.interval_var = ctk.StringVar(
+            value=t.get("interval", "once" if self.preset_date else "none")
+        )
         ctk.CTkComboBox(
             row,
             variable=self.interval_var,
@@ -2002,7 +2027,12 @@ class TaskDialog(ctk.CTkToplevel):
         )
         agents = cfg.get("agents", [])
         names = [a["name"] for a in agents]
-        self.agent_var = ctk.StringVar(value=names[0] if names else "Assistant")
+        cur_name = names[0] if names else "Assistant"
+        if t.get("agent"):
+            match = next((a for a in agents if a["id"] == t["agent"]), None)
+            if match:
+                cur_name = match["name"]
+        self.agent_var = ctk.StringVar(value=cur_name)
         ctk.CTkComboBox(
             row,
             variable=self.agent_var,
@@ -2021,7 +2051,9 @@ class TaskDialog(ctk.CTkToplevel):
         ctk.CTkLabel(
             dt_row, text="Date (YYYY-MM-DD)", font=F_BOLD, text_color=TEXT
         ).grid(row=0, column=0, sticky="w")
-        default_date = self.preset_date or date.today().strftime("%Y-%m-%d")
+        default_date = (
+            t.get("run_date") or self.preset_date or date.today().strftime("%Y-%m-%d")
+        )
         self.date_var = ctk.StringVar(value=default_date)
         self._date_entry = ctk.CTkEntry(
             dt_row, textvariable=self.date_var, height=36, font=F_BODY
@@ -2031,7 +2063,7 @@ class TaskDialog(ctk.CTkToplevel):
         ctk.CTkLabel(dt_row, text="Time (HH:MM)", font=F_BOLD, text_color=TEXT).grid(
             row=0, column=1, sticky="w"
         )
-        self.time_var = ctk.StringVar(value="09:00")
+        self.time_var = ctk.StringVar(value=t.get("run_at", "09:00"))
         ctk.CTkEntry(dt_row, textvariable=self.time_var, height=36, font=F_BODY).grid(
             row=1, column=1, sticky="ew"
         )
@@ -2043,7 +2075,7 @@ class TaskDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(
             self,
-            text="Create Task",
+            text="Save Changes" if self.task else "Create Task",
             height=42,
             fg_color=ACCENT,
             hover_color="#8aa5ff",
@@ -2110,21 +2142,24 @@ class TaskDialog(ctk.CTkToplevel):
             (a for a in agents if a["name"] == self.agent_var.get()),
             agents[0] if agents else {"id": "assistant"},
         )
-        self.on_save(
+        # Preserve id + run history when editing; fresh defaults when creating.
+        base = dict(self.task) if self.task else {}
+        base.update(
             {
-                "id": str(uuid.uuid4()),
+                "id": base.get("id") or str(uuid.uuid4()),
                 "name": name,
                 "prompt": prompt,
                 "interval": interval,
                 "run_date": run_date,
                 "run_at": run_at,
                 "agent": agent["id"],
-                "enabled": True,
-                "last_run": None,
-                "last_result": None,
-                "status": "idle",
+                "enabled": base.get("enabled", True),
+                "last_run": base.get("last_run"),
+                "last_result": base.get("last_result"),
+                "status": base.get("status", "idle"),
             }
         )
+        self.on_save(base)
         self.destroy()
 
 
