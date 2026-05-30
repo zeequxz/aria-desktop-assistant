@@ -3513,6 +3513,23 @@ class SettingsTab(ctk.CTkScrollableFrame):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _test_tts(self):
+        """Speak a sample line with the currently-selected voice and rate."""
+        from agent import tts
+
+        if not tts.is_available():
+            messagebox.showinfo(
+                "Text-to-speech",
+                "Speech engine not available. Install with:\n\npip install pyttsx3",
+            )
+            return
+        try:
+            rate = int(self.tts_rate_var.get())
+        except ValueError:
+            rate = 175
+        voice_id = self._tts_voice_map.get(self.tts_voice_var.get(), "") or None
+        tts.speak("Hello, this is ARIA speaking.", rate=rate, voice_id=voice_id)
+
     # ── OpenAI ChatGPT sign-in (Codex OAuth) ─────────────────────────────────
 
     def _oauth_signin(self):
