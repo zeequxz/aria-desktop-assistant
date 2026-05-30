@@ -1,11 +1,17 @@
 """
 config/settings.py - Persistent settings and API key management
 Stored in user's AppData folder so it survives app updates.
+
+Secret fields (API keys, Telegram token, Discord webhooks) are encrypted at
+rest via config.secrets (Windows DPAPI) so the on-disk file never contains them
+in plain text.
 """
 
 import json
 import os
 from pathlib import Path
+
+from config import secrets as _secrets
 
 
 def get_config_dir() -> Path:
@@ -127,6 +133,8 @@ def load() -> dict:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
+            # Secrets on disk are DPAPI-encrypted; decrypt for in-app use.
+            saved = _secrets.decrypt_settings(saved)
             # Merge with defaults so new keys always exist
             merged = {**DEFAULTS, **saved}
             return merged
@@ -137,8 +145,11 @@ def load() -> dict:
 
 def save(settings: dict):
     try:
+        # Encrypt secret fields before writing so the file never holds plaintext
+        # API keys / tokens / webhooks.
+        to_write = _secrets.encrypt_settings(settings)
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2, ensure_ascii=False)
+            json.dump(to_write, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"[Config] Failed to save settings: {e}")
 

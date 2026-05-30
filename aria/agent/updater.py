@@ -114,7 +114,7 @@ def check_for_updates(
                     # the repo simply has no published releases yet. Point at the
                     # more common cause.
                     on_error(
-                        f"No published releases found for '{repo}'. "
+                        f"No published releases found for '{_repo()}'. "
                         "Publish a GitHub Release (or check the repo name in Settings)."
                     )
                 elif e.code == 403:
