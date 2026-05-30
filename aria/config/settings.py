@@ -52,6 +52,10 @@ DEFAULTS = {
     "messaging_allow_computer_use": True,
     "computer_use_enabled": False,
     "screenshot_interval": 2,
+    # Text-to-speech: ARIA speaks replies aloud when enabled.
+    "tts_enabled": False,
+    "tts_rate": 175,  # words per minute
+    "tts_voice": "",  # system voice id; "" = engine default
     "theme": "dark",
     "font_size": 13,
     "workspace_folder": str(Path.home() / "Documents"),

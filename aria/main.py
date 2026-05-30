@@ -33,6 +33,7 @@ from agent.messaging import MessagingService
 from agent.tray import TrayManager, send_notification
 from agent.clipboard_watcher import ClipboardWatcher
 from agent.voice import VoiceRecorder
+from agent import tts
 from agent import memory as mem
 from agent import history as hist
 from agent.plugins import get_plugin_info
@@ -411,6 +412,23 @@ class ChatTab(ctk.CTkFrame):
             )
             b.pack(side="left", padx=2)
             Tooltip(b, tip)
+
+        # Speaker toggle: turn spoken replies on/off on the fly.
+        self.tts_btn = ctk.CTkButton(
+            hdr_btns,
+            text="🔊" if cfg.get("tts_enabled", False) else "🔇",
+            width=34,
+            height=30,
+            fg_color=tint(ACCENT, 0x33) if cfg.get("tts_enabled", False) else SURF2,
+            hover_color=SURF3,
+            text_color=TEXT,
+            border_color=BORDER,
+            border_width=1,
+            font=F_SMALL,
+            command=self._toggle_tts,
+        )
+        self.tts_btn.pack(side="left", padx=2)
+        Tooltip(self.tts_btn, "Speak replies aloud (text-to-speech) on/off")
 
         # Messages
         self.msg_box = ctk.CTkTextbox(
@@ -1068,6 +1086,13 @@ class ChatTab(ctk.CTkFrame):
         if cfg.get("auto_save_chats", True) and len(self.history_msgs) >= 2:
             self._persist_current_chat()
             self._refresh_history()
+        # Speak the reply aloud if text-to-speech is enabled.
+        if text and cfg.get("tts_enabled", False):
+            tts.speak(
+                text,
+                rate=cfg.get("tts_rate", 175),
+                voice_id=cfg.get("tts_voice", "") or None,
+            )
         self.on_notify("ARIA", "Response ready")
 
     def _on_error(self, err):
@@ -2968,6 +2993,71 @@ class SettingsTab(ctk.CTkScrollableFrame):
             dropdown_fg_color=SURF2,
         ).pack(fill="x", pady=(4, 12))
 
+        # ── Voice (text-to-speech) ──────────────────────────────────────────
+        section("Voice (text-to-speech)")
+        from agent import tts as _tts
+
+        self._check_vars["tts_enabled"] = ctk.BooleanVar(
+            value=s.get("tts_enabled", False)
+        )
+        ctk.CTkCheckBox(
+            self,
+            text="Speak replies aloud",
+            variable=self._check_vars["tts_enabled"],
+            font=F_BODY,
+            text_color=TEXT,
+        ).pack(anchor="w", pady=(0, 8))
+
+        voices = _tts.list_voices()
+        if not _tts.is_available():
+            ctk.CTkLabel(
+                self,
+                text="Speech engine not found. Install with: pip install pyttsx3",
+                font=F_SMALL,
+                text_color=MUTED,
+            ).pack(anchor="w", pady=(0, 8))
+
+        lbl("Voice")
+        self._tts_voice_map = {name: vid for vid, name in voices}
+        cur_vid = s.get("tts_voice", "")
+        cur_name = next(
+            (n for n, vid in self._tts_voice_map.items() if vid == cur_vid),
+            "System default",
+        )
+        voice_names = ["System default"] + list(self._tts_voice_map.keys())
+        self.tts_voice_var = ctk.StringVar(value=cur_name)
+        ctk.CTkComboBox(
+            self,
+            variable=self.tts_voice_var,
+            height=38,
+            font=F_BODY,
+            values=voice_names,
+            dropdown_fg_color=SURF2,
+        ).pack(fill="x", pady=(4, 8))
+
+        lbl("Speaking rate (words per minute)")
+        self.tts_rate_var = ctk.StringVar(value=str(s.get("tts_rate", 175)))
+        ctk.CTkComboBox(
+            self,
+            variable=self.tts_rate_var,
+            height=38,
+            font=F_BODY,
+            values=["125", "150", "175", "200", "225", "250"],
+            dropdown_fg_color=SURF2,
+        ).pack(fill="x", pady=(4, 8))
+
+        ctk.CTkButton(
+            self,
+            text="🔊 Test voice",
+            width=140,
+            height=32,
+            fg_color=SURF2,
+            hover_color=BORDER,
+            text_color=TEXT,
+            font=F_SMALL,
+            command=self._test_tts,
+        ).pack(anchor="w", pady=(0, 12))
+
         section("Behaviour")
         checks = [
             (
@@ -3219,6 +3309,8 @@ class SettingsTab(ctk.CTkScrollableFrame):
             "telegram_allow": self.telegram_allow.get(),
             "discord_webhook": self.discord_webhook.get(),
             "discord_channels": self.discord_channels_box.get("1.0", "end"),
+            "tts_voice": self.tts_voice_var.get(),
+            "tts_rate": self.tts_rate_var.get(),
         }
         for k, v in self._check_vars.items():
             d[k] = v.get()
@@ -3295,9 +3387,24 @@ class SettingsTab(ctk.CTkScrollableFrame):
         ]
         theme_changed = s.get("theme") != self.theme_var.get()
         s["theme"] = self.theme_var.get()
+        # Voice (text-to-speech)
+        s["tts_voice"] = self._tts_voice_map.get(self.tts_voice_var.get(), "")
+        try:
+            s["tts_rate"] = int(self.tts_rate_var.get())
+        except ValueError:
+            s["tts_rate"] = 175
         for key, var in self._check_vars.items():
             s[key] = var.get()
         cfg.save(s)
+        # Reflect the TTS toggle on the chat header speaker button immediately.
+        if self.app and hasattr(self.app, "chat_tab"):
+            ct = self.app.chat_tab
+            if hasattr(ct, "tts_btn"):
+                on_ = s.get("tts_enabled", False)
+                ct.tts_btn.configure(
+                    text="🔊" if on_ else "🔇",
+                    fg_color=tint(ACCENT, 0x33) if on_ else SURF2,
+                )
         self.on_saved()
         # Reset the change-tracking baseline now that everything is persisted.
         self._snapshot = self._state()

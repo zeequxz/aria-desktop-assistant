@@ -25,6 +25,9 @@ schedule>=1.2.1
 psutil>=5.9.0
 requests>=2.31.0
 
+# Text-to-speech (ARIA speaks responses aloud; offline via OS engine)
+pyttsx3>=2.90
+
 # Voice input (optional - comment out if not needed)
 # faster-whisper>=1.0.0
 # sounddevice>=0.4.6

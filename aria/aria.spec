@@ -1,28 +1,33 @@
 # aria.spec - PyInstaller build spec for ARIA
 #
 # Build with:  pyinstaller aria.spec
-# Output:      dist/ARIA/ARIA.exe  (folder, share the whole folder)
-# Single file: change onedir to onefile below (slower startup)
-
+#
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files
 
 block_cipher = None
-ROOT = Path(SPEC).parent  # Folder containing this .spec file
+ROOT = Path(SPEC).parent
 
 a = Analysis(
     ['main.py'],
     pathex=[str(ROOT)],
     binaries=[],
     datas=[
-        # Include the plugins folder
         ('plugins', 'plugins'),
-    # Include CustomTkinter themes/assets. collect_data_files locates the
-    # package wherever pip installed it (global or user site-packages)
-    # instead of guessing a hard-coded path under sys.executable.
     ] + collect_data_files('customtkinter'),
     hiddenimports=[
+        # Text-to-speech (pyttsx3 loads its SAPI5 driver dynamically on Windows)
+        'pyttsx3',
+        'pyttsx3.drivers',
+        'pyttsx3.drivers.sapi5',
+        'pyttsx3.drivers.dummy',
+        'comtypes',
+        'comtypes.client',
+        'comtypes.stream',
+        'win32com',
+        'win32com.client',
+        # GUI / core
         'customtkinter',
         'PIL._tkinter_finder',
         'anthropic',
@@ -34,22 +39,11 @@ a = Analysis(
         'pystray',
         'pystray._win32',
         'schedule',
-        'psutil',
-        'pyperclip',
-        'docx',
-        'openpyxl',
-        'duckduckgo_search',
-        'requests',
-        'win10toast',
-        'playwright',
-        'playwright.sync_api',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['matplotlib', 'scipy', 'pandas', 'tensorflow', 'torch'],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
+    excludes=[],
     cipher=block_cipher,
     noarchive=False,
 )
@@ -66,12 +60,12 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,        # No terminal window shown to users
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # icon='assets/icon.ico',   # Uncomment and add icon.ico file
+    icon='assets/icon.ico' if (ROOT / 'assets' / 'icon.ico').exists() else None,
 )
 
 coll = COLLECT(
