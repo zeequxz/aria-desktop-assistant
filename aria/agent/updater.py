@@ -16,6 +16,7 @@ The repo to check is read from settings (key ``github_repo``) so it can be
 changed without rebuilding; ``DEFAULT_REPO`` is the fallback.
 """
 
+import os
 import sys
 import json
 import tempfile
@@ -31,7 +32,7 @@ from config import settings as cfg
 
 # Single source of truth for the running version. Bump this for each release
 # and tag the GitHub release to match (e.g. version "1.1.0" -> tag "v1.1.0").
-CURRENT_VERSION = "1.0.1"
+CURRENT_VERSION = "1.0.2"
 
 # Used only if the user hasn't set "github_repo" in settings.
 DEFAULT_REPO = "zeequxz/aria-desktop-assistant"
@@ -248,35 +249,56 @@ def _find_app_root(folder: Path) -> Optional[Path]:
 
 
 def _write_and_launch_helper(new_root: Path, target_dir: Path):
-    """Write a batch script that waits for ARIA to exit, copies the new files
-    over the install directory, relaunches the app, and deletes itself."""
+    """Write a batch script that waits for THIS ARIA process to exit, copies the
+    new files over the install directory, relaunches the app, and logs progress.
+
+    Reliability notes (these were real bugs in an earlier version):
+      * Wait on our exact PID, not the image name — and force-kill if it lingers,
+        otherwise robocopy can't overwrite the still-locked ARIA.exe/_internal.
+      * Use `ping` to sleep, not `timeout`, which errors out when the helper has
+        no console (the process is launched in its own window).
+      * Write a log to %TEMP%\\aria_update_log.txt so failures are diagnosable.
+    """
     helper = Path(tempfile.gettempdir()) / "aria_apply_update.bat"
+    log = Path(tempfile.gettempdir()) / "aria_update_log.txt"
     exe_path = target_dir / "ARIA.exe"
+    pid = os.getpid()
     script = f"""@echo off
-setlocal
-echo Updating ARIA, please wait...
+setlocal enableextensions
+set "LOG={log}"
+echo [%date% %time%] ARIA update helper started > "%LOG%"
+echo waiting for PID {pid} to exit >> "%LOG%"
 
-rem Wait for the running ARIA.exe to close.
+rem Wait up to ~30s for the running ARIA (this PID) to close.
+set /a n=0
 :waitloop
-tasklist /FI "IMAGENAME eq ARIA.exe" 2>NUL | find /I "ARIA.exe" >NUL
-if not errorlevel 1 (
-    timeout /t 1 /nobreak >NUL
-    goto waitloop
-)
+tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL
+if errorlevel 1 goto exited
+set /a n+=1
+if %n% geq 30 goto force
+ping -n 2 127.0.0.1 >NUL
+goto waitloop
 
-rem Copy the new build over the existing install. robocopy returns non-zero
-rem exit codes even on success, so we don't check errorlevel here.
-robocopy "{new_root}" "{target_dir}" /E /IS /IT /R:2 /W:1 /NFL /NDL /NJH /NJS >NUL
+:force
+echo wait timed out; force-killing ARIA.exe >> "%LOG%"
+taskkill /IM ARIA.exe /F >> "%LOG%" 2>&1
+ping -n 3 127.0.0.1 >NUL
 
-rem Relaunch and clean up.
+:exited
+echo copying new files from "{new_root}" to "{target_dir}" >> "%LOG%"
+robocopy "{new_root}" "{target_dir}" /E /IS /IT /R:5 /W:2 >> "%LOG%" 2>&1
+echo robocopy exit code: %errorlevel% >> "%LOG%"
+
+echo relaunching ARIA >> "%LOG%"
+cd /d "{target_dir}"
 start "" "{exe_path}"
-del "%~f0"
+echo done >> "%LOG%"
 """
     helper.write_text(script, encoding="utf-8")
-    # Detached so it survives this process exiting.
+    # Own console window so cmd built-ins behave and the user sees progress;
+    # survives this process exiting.
     subprocess.Popen(
         ["cmd", "/c", str(helper)],
-        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        | getattr(subprocess, "DETACHED_PROCESS", 0),
+        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
         close_fds=True,
     )
