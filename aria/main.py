@@ -3232,13 +3232,11 @@ class SettingsTab(ctk.CTkScrollableFrame):
             justify="left",
             wraplength=560,
         ).pack(anchor="w", pady=(0, 6))
-        self._check_vars["advanced_mode"] = ctk.BooleanVar(
-            value=s.get("advanced_mode", False)
-        )
+        self.advanced_mode_var = ctk.BooleanVar(value=s.get("advanced_mode", False))
         ctk.CTkCheckBox(
             self,
             text=t("Enable advanced mode (multi-agent orchestration)"),
-            variable=self._check_vars["advanced_mode"],
+            variable=self.advanced_mode_var,
             font=F_BODY,
             text_color=TEXT,
         ).pack(anchor="w", pady=(0, 8))
@@ -3499,6 +3497,7 @@ class SettingsTab(ctk.CTkScrollableFrame):
             "tts_enabled": self.tts_enabled_var.get(),
             "tts_voice": self.tts_voice_var.get(),
             "tts_rate": self.tts_rate_var.get(),
+            "advanced_mode": self.advanced_mode_var.get(),
         }
         for k, v in self._check_vars.items():
             d[k] = v.get()
@@ -3523,6 +3522,7 @@ class SettingsTab(ctk.CTkScrollableFrame):
             self.tts_enabled_var,
             self.tts_voice_var,
             self.tts_rate_var,
+            self.advanced_mode_var,
             self.telegram_token,
             self.telegram_allow,
             self.discord_webhook,
@@ -3587,6 +3587,7 @@ class SettingsTab(ctk.CTkScrollableFrame):
         s["ui_language"] = self._ui_lang_codes.get(self.ui_lang_var.get(), "en")
         # Voice (text-to-speech)
         s["tts_enabled"] = self.tts_enabled_var.get()
+        s["advanced_mode"] = self.advanced_mode_var.get()
         s["tts_voice"] = self._tts_voice_map.get(self.tts_voice_var.get(), "")
         try:
             s["tts_rate"] = int(self.tts_rate_var.get())
