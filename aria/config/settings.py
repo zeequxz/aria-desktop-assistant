@@ -50,6 +50,9 @@ DEFAULTS = {
     # When False, inbound messages can chat/search/browse but NOT control the
     # mouse/keyboard — a quick way to revoke remote PC control temporarily.
     "messaging_allow_computer_use": True,
+    # Advanced mode unlocks multi-agent orchestration: the active agent can
+    # delegate sub-tasks to other agents and synthesise their results.
+    "advanced_mode": False,
     "computer_use_enabled": False,
     "screenshot_interval": 2,
     # Text-to-speech: ARIA speaks replies aloud when enabled.

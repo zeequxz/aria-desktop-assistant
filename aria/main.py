@@ -3218,6 +3218,31 @@ class SettingsTab(ctk.CTkScrollableFrame):
             command=self._test_tts,
         ).pack(anchor="w", pady=(0, 12))
 
+        # ── Advanced ────────────────────────────────────────────────────────
+        section("Advanced")
+        ctk.CTkLabel(
+            self,
+            text=t(
+                "Multi-agent orchestration: the active agent can delegate "
+                "sub-tasks to your other agents and combine their results to "
+                "tackle complex builds (like Hermes / OpenClaw)."
+            ),
+            font=F_SMALL,
+            text_color=MUTED,
+            justify="left",
+            wraplength=560,
+        ).pack(anchor="w", pady=(0, 6))
+        self._check_vars["advanced_mode"] = ctk.BooleanVar(
+            value=s.get("advanced_mode", False)
+        )
+        ctk.CTkCheckBox(
+            self,
+            text=t("Enable advanced mode (multi-agent orchestration)"),
+            variable=self._check_vars["advanced_mode"],
+            font=F_BODY,
+            text_color=TEXT,
+        ).pack(anchor="w", pady=(0, 8))
+
         section("Behaviour")
         checks = [
             (

@@ -46,7 +46,9 @@ MAX_ITERATIONS = 30
 _plugin_tools, _plugin_schemas = load_plugins()
 
 
-def _build_tool_registry(use_computer: bool, use_browser: bool) -> tuple[dict, list]:
+def _build_tool_registry(
+    use_computer: bool, use_browser: bool, advanced: bool = False
+) -> tuple[dict, list]:
     """Build the complete tool registry for an agent run."""
     tools = {}
     schemas = []
@@ -72,6 +74,16 @@ def _build_tool_registry(use_computer: bool, use_browser: bool) -> tuple[dict, l
     if use_browser:
         tools.update(BROWSER_TOOLS)
         schemas += BROWSER_TOOL_SCHEMAS
+
+    # Advanced mode: multi-agent orchestration (delegate to other agents).
+    if advanced:
+        from agent.orchestration import (
+            ORCHESTRATION_TOOLS,
+            ORCHESTRATION_TOOL_SCHEMAS,
+        )
+
+        tools.update(ORCHESTRATION_TOOLS)
+        schemas += ORCHESTRATION_TOOL_SCHEMAS
 
     return tools, schemas
 
@@ -125,6 +137,17 @@ class AgentOrchestrator:
         elif lang == "auto":
             system_prompt += "\n\nRespond in the same language the user writes in."
 
+        # Advanced mode: tell the agent it can coordinate other agents.
+        if s.get("advanced_mode", False):
+            system_prompt += (
+                "\n\nADVANCED MODE: You can orchestrate other specialist agents to "
+                "tackle complex, multi-step builds. Use list_agents to see who's "
+                "available and delegate_to_agent to assign a self-contained sub-task "
+                "to the best-suited agent (e.g. research, writing, file work). Plan "
+                "the work, delegate parts in parallel where sensible, then combine "
+                "their results into the final deliverable. Do simple tasks yourself."
+            )
+
         try:
             if provider == "claude":
                 self._run_claude(
@@ -163,7 +186,9 @@ class AgentOrchestrator:
 
         client = anthropic.Anthropic(api_key=api_key)
         model = s.get("claude_model", "claude-opus-4-5")
-        all_tools, schemas = _build_tool_registry(use_computer, use_browser)
+        all_tools, schemas = _build_tool_registry(
+            use_computer, use_browser, advanced=s.get("advanced_mode", False)
+        )
 
         if include_screenshot:
             ss = take_screenshot()
