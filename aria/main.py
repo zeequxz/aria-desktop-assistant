@@ -383,8 +383,25 @@ class ChatTab(ctk.CTkFrame):
         )
         self.agent_menu.grid(row=0, column=1, sticky="w", padx=8)
         Tooltip(self.agent_menu, "Choose which agent answers in this chat")
-        self.agent_sub_lbl = ctk.CTkLabel(hdr, text="", font=F_SMALL, text_color=MUTED)
-        self.agent_sub_lbl.grid(row=0, column=1, sticky="w", padx=(196, 0))
+
+        # AI model picker — choose which AI answers, overriding Settings per chat.
+        self._ai_overrides = {}
+        self.ai_var = ctk.StringVar(value="Default (Settings)")
+        self.ai_menu = ctk.CTkOptionMenu(
+            hdr,
+            variable=self.ai_var,
+            font=F_SMALL,
+            height=34,
+            width=150,
+            fg_color=SURF2,
+            button_color=SURF3,
+            button_hover_color=BORDER,
+            dropdown_fg_color=SURF2,
+            values=[label for label, _ in ai_choices()],
+            command=self._on_ai_pick,
+        )
+        self.ai_menu.grid(row=0, column=1, sticky="w", padx=(196, 0))
+        Tooltip(self.ai_menu, "Choose which AI model answers in this chat")
 
         hdr_btns = ctk.CTkFrame(hdr, fg_color="transparent")
         hdr_btns.grid(row=0, column=2, padx=10)
@@ -599,7 +616,6 @@ class ChatTab(ctk.CTkFrame):
         color = agent_color(agent)
         self.agent_icon_lbl.configure(text=agent["icon"], text_color=color)
         self.agent_var.set(agent["name"])
-        self.agent_sub_lbl.configure(text=agent.get("desc", ""))
 
     def reload_agents(self):
         self._load_agents()
@@ -1067,6 +1083,7 @@ class ChatTab(ctk.CTkFrame):
             use_computer_tools=use_computer,
             use_browser_tools=use_browser,
             include_screenshot=self._pending_screenshot,
+            overrides=self._ai_overrides or None,
         )
         self._pending_screenshot = False
 

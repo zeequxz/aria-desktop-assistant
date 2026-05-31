@@ -21,18 +21,21 @@ from agent.plugins import load_plugins
 
 try:
     import anthropic
+
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
 try:
     import openai
+
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
 
 try:
     import requests
+
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
@@ -54,8 +57,13 @@ def _build_tool_registry(use_computer: bool, use_browser: bool) -> tuple[dict, l
     tools.update(MEMORY_TOOLS)
     tools.update(MESSAGING_TOOLS)
     tools.update(_plugin_tools)
-    schemas += (FILE_SCHEMAS + SEARCH_TOOL_SCHEMAS + MEMORY_TOOL_SCHEMAS
-                + MESSAGING_TOOL_SCHEMAS + _plugin_schemas)
+    schemas += (
+        FILE_SCHEMAS
+        + SEARCH_TOOL_SCHEMAS
+        + MEMORY_TOOL_SCHEMAS
+        + MESSAGING_TOOL_SCHEMAS
+        + _plugin_schemas
+    )
 
     if use_computer:
         tools.update(COMPUTER_TOOLS)
@@ -94,8 +102,13 @@ class AgentOrchestrator:
         use_computer_tools: bool = False,
         use_browser_tools: bool = True,
         include_screenshot: bool = False,
+        overrides: dict = None,
     ):
         s = cfg.load()
+        # Per-chat / per-task AI selection: patch the settings dict with any
+        # provider/model overrides so the chosen AI is used for this run only.
+        if overrides:
+            s = {**s, **{k: v for k, v in overrides.items() if v}}
         provider = s.get("provider", "claude")
 
         # Inject memory into system prompt
@@ -105,9 +118,18 @@ class AgentOrchestrator:
 
         try:
             if provider == "claude":
-                self._run_claude(messages, system_prompt, use_computer_tools, use_browser_tools, include_screenshot, s)
+                self._run_claude(
+                    messages,
+                    system_prompt,
+                    use_computer_tools,
+                    use_browser_tools,
+                    include_screenshot,
+                    s,
+                )
             elif provider == "openai":
-                self._run_openai(messages, system_prompt, use_computer_tools, use_browser_tools, s)
+                self._run_openai(
+                    messages, system_prompt, use_computer_tools, use_browser_tools, s
+                )
             elif provider == "local":
                 self._run_ollama(messages, system_prompt, s)
             else:
@@ -117,13 +139,17 @@ class AgentOrchestrator:
 
     # ── Claude ─────────────────────────────────────────────────────────────
 
-    def _run_claude(self, messages, system_prompt, use_computer, use_browser, include_screenshot, s):
+    def _run_claude(
+        self, messages, system_prompt, use_computer, use_browser, include_screenshot, s
+    ):
         if not ANTHROPIC_AVAILABLE:
             self.on_error("anthropic package not installed. Run: pip install anthropic")
             return
         api_key = s.get("claude_api_key", "")
         if not api_key:
-            self.on_error("No Claude API key. Go to Settings → add your Claude API key.")
+            self.on_error(
+                "No Claude API key. Go to Settings → add your Claude API key."
+            )
             return
 
         client = anthropic.Anthropic(api_key=api_key)
@@ -133,13 +159,22 @@ class AgentOrchestrator:
         if include_screenshot:
             ss = take_screenshot()
             if "image_base64" in ss:
-                messages = [{
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ss["image_base64"]}},
-                        {"type": "text", "text": "Current screen state:"},
-                    ],
-                }] + messages
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": ss["image_base64"],
+                                },
+                            },
+                            {"type": "text", "text": "Current screen state:"},
+                        ],
+                    }
+                ] + messages
 
         for iteration in range(MAX_ITERATIONS):
             if self._stop:
@@ -173,18 +208,22 @@ class AgentOrchestrator:
                     self.on_tool_call(block.name, block.input)
                     result = self._call_tool(block.name, block.input, all_tools)
                     self.on_tool_result(block.name, result)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result),
-                    })
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(result),
+                        }
+                    )
                 messages.append({"role": "user", "content": tool_results})
                 continue
 
             self.on_done(full_text)
             return
 
-        self.on_error(f"Agent reached max iterations ({MAX_ITERATIONS}). Task too complex.")
+        self.on_error(
+            f"Agent reached max iterations ({MAX_ITERATIONS}). Task too complex."
+        )
 
     # ── OpenAI ─────────────────────────────────────────────────────────────
 
@@ -198,8 +237,10 @@ class AgentOrchestrator:
         # dedicated client; it runs its own tool loop via this orchestrator.
         if s.get("openai_auth_mode") == "oauth":
             from agent import codex_backend
-            codex_backend.run(self, messages, system_prompt, all_tools, schemas,
-                              model, MAX_ITERATIONS)
+
+            codex_backend.run(
+                self, messages, system_prompt, all_tools, schemas, model, MAX_ITERATIONS
+            )
             return
 
         if not OPENAI_AVAILABLE:
@@ -212,7 +253,14 @@ class AgentOrchestrator:
         client = openai.OpenAI(api_key=api_key)
 
         def to_oai(schema):
-            return {"type": "function", "function": {"name": schema["name"], "description": schema["description"], "parameters": schema["input_schema"]}}
+            return {
+                "type": "function",
+                "function": {
+                    "name": schema["name"],
+                    "description": schema["description"],
+                    "parameters": schema["input_schema"],
+                },
+            }
 
         oai_messages = [{"role": "system", "content": system_prompt}] + messages
 
@@ -221,7 +269,8 @@ class AgentOrchestrator:
                 self.on_done("")
                 return
             response = client.chat.completions.create(
-                model=model, messages=oai_messages,
+                model=model,
+                messages=oai_messages,
                 tools=[to_oai(t) for t in schemas],
                 max_tokens=s.get("max_tokens", 4096),
             )
@@ -241,7 +290,13 @@ class AgentOrchestrator:
                 self.on_tool_call(tc.function.name, inp)
                 result = self._call_tool(tc.function.name, inp, all_tools)
                 self.on_tool_result(tc.function.name, result)
-                oai_messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result)})
+                oai_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(result),
+                    }
+                )
 
         self.on_error(f"Max iterations reached.")
 
@@ -255,8 +310,16 @@ class AgentOrchestrator:
         model = s.get("ollama_model", "llama3")
         payload = {
             "model": model,
-            "messages": [{"role": "system", "content": system_prompt}] + [
-                {"role": m["role"], "content": m["content"] if isinstance(m["content"], str) else str(m["content"])}
+            "messages": [{"role": "system", "content": system_prompt}]
+            + [
+                {
+                    "role": m["role"],
+                    "content": (
+                        m["content"]
+                        if isinstance(m["content"], str)
+                        else str(m["content"])
+                    ),
+                }
                 for m in messages
             ],
             "stream": False,
@@ -297,19 +360,32 @@ def run_agent_in_thread(
     use_computer_tools: bool = False,
     use_browser_tools: bool = True,
     include_screenshot: bool = False,
+    overrides: dict = None,
 ) -> AgentOrchestrator:
     orch = AgentOrchestrator(on_token, on_tool_call, on_tool_result, on_done, on_error)
     t = threading.Thread(
         target=orch.run,
-        args=(messages, system_prompt, use_computer_tools, use_browser_tools, include_screenshot),
+        args=(
+            messages,
+            system_prompt,
+            use_computer_tools,
+            use_browser_tools,
+            include_screenshot,
+            overrides,
+        ),
         daemon=True,
     )
     t.start()
     return orch
 
 
-def run_agent_sync(prompt: str, system_prompt: str = "You are a helpful assistant.",
-                   use_computer_tools: bool = True, use_browser_tools: bool = True) -> str:
+def run_agent_sync(
+    prompt: str,
+    system_prompt: str = "You are a helpful assistant.",
+    use_computer_tools: bool = True,
+    use_browser_tools: bool = True,
+    overrides: dict = None,
+) -> str:
     """Run the agent to completion on a single prompt and return the reply text.
     Used by the messaging service (which is already on a background thread).
     Collects streamed tokens and the final/erro r result into one string."""
@@ -326,13 +402,16 @@ def run_agent_sync(prompt: str, system_prompt: str = "You are a helpful assistan
     def on_error(e):
         collected["error"] = str(e)
 
-    orch = AgentOrchestrator(on_token, lambda *a: None, lambda *a: None, on_done, on_error)
+    orch = AgentOrchestrator(
+        on_token, lambda *a: None, lambda *a: None, on_done, on_error
+    )
     orch.run(
         messages=[{"role": "user", "content": prompt}],
         system_prompt=system_prompt,
         use_computer_tools=use_computer_tools,
         use_browser_tools=use_browser_tools,
         include_screenshot=False,
+        overrides=overrides,
     )
     if collected["error"] and not collected["text"]:
         return f"Error: {collected['error']}"

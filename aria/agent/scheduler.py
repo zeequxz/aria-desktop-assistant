@@ -15,6 +15,7 @@ from typing import Callable
 
 try:
     import schedule
+
     SCHEDULE_AVAILABLE = True
 except ImportError:
     SCHEDULE_AVAILABLE = False
@@ -78,7 +79,9 @@ class TaskScheduler:
         elif interval == "weekly":
             run_at = task.get("run_at", "09:00")
             weekday = self._weekday_of(task)
-            day_job = getattr(schedule.every(), weekday) if weekday else schedule.every().week
+            day_job = (
+                getattr(schedule.every(), weekday) if weekday else schedule.every().week
+            )
             try:
                 job = day_job.at(run_at).do(run_job)
             except Exception:
@@ -121,8 +124,15 @@ class TaskScheduler:
             return None
         try:
             d = datetime.strptime(anchor, "%Y-%m-%d")
-            return ["monday", "tuesday", "wednesday", "thursday",
-                    "friday", "saturday", "sunday"][d.weekday()]
+            return [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            ][d.weekday()]
         except Exception:
             return None
 
@@ -156,14 +166,22 @@ class TaskScheduler:
 
         agents = cfg.get("agents", [])
         agent_id = task.get("agent", "assistant")
-        agent = next((a for a in agents if a["id"] == agent_id), agents[0] if agents else None)
+        agent = next(
+            (a for a in agents if a["id"] == agent_id), agents[0] if agents else None
+        )
         system = agent["system"] if agent else "You are a helpful assistant."
 
         results = []
 
-        def on_token(t): results.append(t)
-        def on_tool_call(name, inp): pass
-        def on_tool_result(name, res): pass
+        def on_token(t):
+            results.append(t)
+
+        def on_tool_call(name, inp):
+            pass
+
+        def on_tool_result(name, res):
+            pass
+
         def on_done(text):
             full = "".join(results)
             self._save_task_result(task_id, task_name, full)
@@ -206,11 +224,13 @@ class TaskScheduler:
                     history = json.load(f)
             except Exception:
                 pass
-        history.append({
-            "timestamp": datetime.now().isoformat(),
-            "task_name": task_name,
-            "result": result,
-        })
+        history.append(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "task_name": task_name,
+                "result": result,
+            }
+        )
         history = history[-50:]  # Keep last 50 runs
         with open(log_file, "w") as f:
             json.dump(history, f, indent=2)
