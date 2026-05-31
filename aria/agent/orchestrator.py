@@ -116,6 +116,15 @@ class AgentOrchestrator:
         if memory_text:
             system_prompt = f"{system_prompt}\n\n{memory_text}"
 
+        # Reply-language directive.
+        lang = s.get("response_language", "auto")
+        if lang == "sv":
+            system_prompt += "\n\nAlways respond in Swedish (svenska)."
+        elif lang == "en":
+            system_prompt += "\n\nAlways respond in English."
+        elif lang == "auto":
+            system_prompt += "\n\nRespond in the same language the user writes in."
+
         try:
             if provider == "claude":
                 self._run_claude(

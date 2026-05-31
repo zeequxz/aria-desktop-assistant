@@ -56,6 +56,10 @@ DEFAULTS = {
     "tts_enabled": False,
     "tts_rate": 175,  # words per minute
     "tts_voice": "",  # system voice id; "" = engine default
+    # Language the AI replies in: "auto" (match the user), "en", or "sv".
+    "response_language": "auto",
+    # UI language: "en" or "sv" (applies on restart).
+    "ui_language": "en",
     "theme": "dark",
     "font_size": 13,
     "workspace_folder": str(Path.home() / "Documents"),

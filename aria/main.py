@@ -3087,6 +3087,29 @@ class SettingsTab(ctk.CTkScrollableFrame):
         ).grid(row=0, column=1, padx=(8, 0))
 
         # Behaviour
+        section("Language")
+        lbl("AI reply language")
+        # Map friendly labels to stored codes both ways.
+        self._lang_labels = {
+            "auto": "Auto (match me)",
+            "en": "English",
+            "sv": "Svenska",
+        }
+        self._lang_codes = {v: k for k, v in self._lang_labels.items()}
+        self.response_lang_var = ctk.StringVar(
+            value=self._lang_labels.get(
+                s.get("response_language", "auto"), "Auto (match me)"
+            )
+        )
+        ctk.CTkComboBox(
+            self,
+            variable=self.response_lang_var,
+            height=38,
+            font=F_BODY,
+            values=list(self._lang_labels.values()),
+            dropdown_fg_color=SURF2,
+        ).pack(fill="x", pady=(4, 12))
+
         section("Appearance")
         lbl("Theme (applies after restart)")
         self.theme_var = ctk.StringVar(value=s.get("theme", "dark"))
@@ -3494,6 +3517,9 @@ class SettingsTab(ctk.CTkScrollableFrame):
         ]
         theme_changed = s.get("theme") != self.theme_var.get()
         s["theme"] = self.theme_var.get()
+        s["response_language"] = self._lang_codes.get(
+            self.response_lang_var.get(), "auto"
+        )
         # Voice (text-to-speech)
         s["tts_enabled"] = self.tts_enabled_var.get()
         s["tts_voice"] = self._tts_voice_map.get(self.tts_voice_var.get(), "")
