@@ -1701,7 +1701,7 @@ class AgentManagerDialog(ctk.CTkToplevel):
             row.columnconfigure(1, weight=1)
             ctk.CTkLabel(
                 row,
-                text=agentd.get("icon", "✦"),
+                text=agent.get("icon", "✦"),
                 font=("Segoe UI", 18),
                 text_color=agent_color(agent),
                 width=34,
@@ -1720,7 +1720,7 @@ class AgentManagerDialog(ctk.CTkToplevel):
                 font=F_SMALL,
                 command=lambda a=agent: self._edit(a),
             ).grid(row=0, column=2, padx=2)
-            if not agentd.get("builtin"):
+            if not agent.get("builtin"):
                 ctk.CTkButton(
                     row,
                     text=t("✕"),
@@ -2048,7 +2048,7 @@ class PromptLibraryDialog(ctk.CTkToplevel):
 
     def _add(self):
         name = self.new_name.get().strip()
-        text = self.new_textd.get("1.0", "end").strip()
+        text = self.new_text.get("1.0", "end").strip()
         if not name or not text:
             messagebox.showwarning("Missing info", "Enter both a name and prompt text.")
             return
@@ -2524,7 +2524,7 @@ class CalendarTab(ctk.CTkFrame):
         tasks = [
             t
             for t in cfg.get("tasks", [])
-            if td.get("enabled", True) and task_occurs_on(t, self._selected)
+            if t.get("enabled", True) and task_occurs_on(t, self._selected)
         ]
         if not tasks:
             ctk.CTkLabel(
@@ -2660,7 +2660,7 @@ class MemoryTab(ctk.CTkFrame):
                 "work": ACCENT,
                 "personal": WARNING,
                 "task": SUCCESS,
-            }.get(factd.get("category", "general"), MUTED)
+            }.get(fact.get("category", "general"), MUTED)
             ctk.CTkLabel(
                 row, text=f"●", font=F_BOLD, text_color=cat_color, width=20
             ).grid(row=0, column=0, padx=(12, 0), pady=12)
