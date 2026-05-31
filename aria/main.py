@@ -128,7 +128,7 @@ def agent_color(agent):
     own 'color' field, then the default accent."""
     if not agent:
         return ACCENT
-    return AGENT_COLORS.get(agentd.get("id"), agentd.get("color", ACCENT))
+    return AGENT_COLORS.get(agent.get("id"), agent.get("color", ACCENT))
 
 
 # Selectable AI models, grouped by provider. Each maps a friendly label to the
