@@ -2121,7 +2121,7 @@ class TaskDialog(ctk.CTkToplevel):
         )
         self.prompt_box.pack(fill="x", padx=20, pady=(4, 14))
         if td.get("prompt"):
-            self.prompt_box.insert("end", t["prompt"])
+            self.prompt_box.insert("end", td["prompt"])
 
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", padx=20, pady=(0, 12))
@@ -2150,7 +2150,7 @@ class TaskDialog(ctk.CTkToplevel):
         names = [a["name"] for a in agents]
         cur_name = names[0] if names else "Assistant"
         if td.get("agent"):
-            match = next((a for a in agents if a["id"] == t["agent"]), None)
+            match = next((a for a in agents if a["id"] == td["agent"]), None)
             if match:
                 cur_name = match["name"]
         self.agent_var = ctk.StringVar(value=cur_name)
@@ -2464,7 +2464,7 @@ class CalendarTab(ctk.CTkFrame):
             for c, d in enumerate(week):
                 in_month = d.month == self._month
                 count = sum(
-                    1 for t in tasks if td.get("enabled", True) and task_occurs_on(t, d)
+                    1 for t in tasks if t.get("enabled", True) and task_occurs_on(t, d)
                 )
                 self._day_cells[d] = self._make_cell(
                     r, c, d, in_month, d == today, count
