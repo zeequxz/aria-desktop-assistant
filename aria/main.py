@@ -130,6 +130,53 @@ def agent_color(agent):
     return AGENT_COLORS.get(agent.get("id"), agent.get("color", ACCENT))
 
 
+# Selectable AI models, grouped by provider. Each maps a friendly label to the
+# override dict the orchestrator applies for that run only.
+AI_MODELS = {
+    "claude": [
+        ("Claude Opus 4.5", "claude-opus-4-5"),
+        ("Claude Sonnet 4.5", "claude-sonnet-4-5"),
+        ("Claude Haiku 4.5", "claude-haiku-4-5-20251001"),
+    ],
+    "openai": [
+        ("GPT-5.5", "gpt-5.5"),
+        ("GPT-5.5 Codex", "gpt-5.5-codex"),
+        ("GPT-4o", "gpt-4o"),
+        ("GPT-4 Turbo", "gpt-4-turbo"),
+    ],
+    "local": [
+        ("Ollama: llama3", "llama3"),
+        ("Ollama: mistral", "mistral"),
+        ("Ollama: gemma", "gemma"),
+    ],
+}
+_MODEL_KEY = {
+    "claude": "claude_model",
+    "openai": "openai_model",
+    "local": "ollama_model",
+}
+
+
+def ai_choices():
+    """Return [(label, override_dict)] for every selectable AI, plus a leading
+    'Default (Settings)' entry that applies no override."""
+    out = [("Default (Settings)", {})]
+    for provider, models in AI_MODELS.items():
+        for label, model_id in models:
+            out.append((label, {"provider": provider, _MODEL_KEY[provider]: model_id}))
+    return out
+
+
+def ai_label_for(overrides: dict) -> str:
+    """Reverse lookup: the label matching a stored override dict (or Default)."""
+    if not overrides:
+        return "Default (Settings)"
+    for label, ov in ai_choices():
+        if ov == overrides:
+            return label
+    return "Default (Settings)"
+
+
 def tint(hex_color, alpha):
     """Blend hex_color over the app background at the given alpha (0-255) and
     return a solid #RRGGBB. Tkinter has no alpha channel, so 8-digit #RRGGBBAA
@@ -606,6 +653,12 @@ class ChatTab(ctk.CTkFrame):
         agent = self._agents_by_name.get(name)
         if agent:
             self._select_agent(agent)
+
+    def _on_ai_pick(self, label):
+        """Set the AI override for this chat from the picker label."""
+        self._ai_overrides = dict(
+            next((ov for lbl, ov in ai_choices() if lbl == label), {})
+        )
 
     def _edit_agents(self):
         """Open the agent manager (add / edit / delete)."""
@@ -2103,6 +2156,20 @@ class TaskDialog(ctk.CTkToplevel):
             dropdown_fg_color=SURF2,
         ).grid(row=1, column=1, sticky="ew")
 
+        # AI model picker for this task (overrides the global Settings choice).
+        ctk.CTkLabel(self, text="AI model", font=F_BOLD, text_color=TEXT).pack(
+            anchor="w", padx=20, pady=(8, 0)
+        )
+        self.ai_var = ctk.StringVar(value=ai_label_for(t.get("ai_overrides")))
+        ctk.CTkComboBox(
+            self,
+            variable=self.ai_var,
+            height=36,
+            font=F_BODY,
+            values=[label for label, _ in ai_choices()],
+            dropdown_fg_color=SURF2,
+        ).pack(fill="x", padx=20, pady=(4, 12))
+
         # Date + time row. Date anchors 'once' (exact day), 'weekly' (weekday)
         # and 'monthly' (day-of-month) tasks; time sets when they run.
         dt_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -2214,6 +2281,9 @@ class TaskDialog(ctk.CTkToplevel):
                 "run_date": run_date,
                 "run_at": run_at,
                 "agent": agent["id"],
+                "ai_overrides": next(
+                    (ov for lbl, ov in ai_choices() if lbl == self.ai_var.get()), {}
+                ),
                 "enabled": base.get("enabled", True),
                 "last_run": base.get("last_run"),
                 "last_result": base.get("last_result"),

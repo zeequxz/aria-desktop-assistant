@@ -207,6 +207,7 @@ class TaskScheduler:
             on_tool_result=on_tool_result,
             on_done=on_done,
             on_error=on_error,
+            overrides=task.get("ai_overrides") or None,
         )
 
     def run_task_now(self, task: dict):
