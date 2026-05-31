@@ -32,7 +32,7 @@ from config import settings as cfg
 
 # Single source of truth for the running version. Bump this for each release
 # and tag the GitHub release to match (e.g. version "1.1.0" -> tag "v1.1.0").
-CURRENT_VERSION = "1.0.2"
+CURRENT_VERSION = "1.0.3"
 
 # Used only if the user hasn't set "github_repo" in settings.
 DEFAULT_REPO = "zeequxz/aria-desktop-assistant"
