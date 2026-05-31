@@ -128,7 +128,7 @@ def agent_color(agent):
     own 'color' field, then the default accent."""
     if not agent:
         return ACCENT
-    return AGENT_COLORS.get(agent.get("id"), agent.get("color", ACCENT))
+    return AGENT_COLORS.get(agentd.get("id"), agentd.get("color", ACCENT))
 
 
 # Selectable AI models, grouped by provider. Each maps a friendly label to the
@@ -1370,8 +1370,8 @@ class TasksTab(ctk.CTkFrame):
             tasks = [
                 t
                 for t in tasks
-                if query in t.get("name", "").lower()
-                or query in t.get("prompt", "").lower()
+                if query in td.get("name", "").lower()
+                or query in td.get("prompt", "").lower()
             ]
         if not tasks:
             msg = (
@@ -1517,7 +1517,7 @@ class TasksTab(ctk.CTkFrame):
         tasks = cfg.get("tasks", [])
         # Upsert: replace an existing task with the same id, else append.
         for i, t in enumerate(tasks):
-            if t.get("id") == data.get("id"):
+            if td.get("id") == data.get("id"):
                 tasks[i] = data
                 break
         else:
@@ -1701,7 +1701,7 @@ class AgentManagerDialog(ctk.CTkToplevel):
             row.columnconfigure(1, weight=1)
             ctk.CTkLabel(
                 row,
-                text=agent.get("icon", "✦"),
+                text=agentd.get("icon", "✦"),
                 font=("Segoe UI", 18),
                 text_color=agent_color(agent),
                 width=34,
@@ -1720,7 +1720,7 @@ class AgentManagerDialog(ctk.CTkToplevel):
                 font=F_SMALL,
                 command=lambda a=agent: self._edit(a),
             ).grid(row=0, column=2, padx=2)
-            if not agent.get("builtin"):
+            if not agentd.get("builtin"):
                 ctk.CTkButton(
                     row,
                     text=t("✕"),
@@ -2048,7 +2048,7 @@ class PromptLibraryDialog(ctk.CTkToplevel):
 
     def _add(self):
         name = self.new_name.get().strip()
-        text = self.new_text.get("1.0", "end").strip()
+        text = self.new_textd.get("1.0", "end").strip()
         if not name or not text:
             messagebox.showwarning("Missing info", "Enter both a name and prompt text.")
             return
@@ -2082,7 +2082,7 @@ class TaskDialog(ctk.CTkToplevel):
         self._build()
 
     def _build(self):
-        t = self.task or {}
+        td = self.task or {}
         ctk.CTkLabel(
             self,
             text="Edit Task" if self.task else "New Task",
@@ -2099,7 +2099,7 @@ class TaskDialog(ctk.CTkToplevel):
         ctk.CTkLabel(self, text=t("Task name"), font=F_BOLD, text_color=TEXT).pack(
             anchor="w", padx=20
         )
-        self.name_var = ctk.StringVar(value=t.get("name", ""))
+        self.name_var = ctk.StringVar(value=td.get("name", ""))
         ctk.CTkEntry(
             self,
             textvariable=self.name_var,
@@ -2120,7 +2120,7 @@ class TaskDialog(ctk.CTkToplevel):
             border_width=0,
         )
         self.prompt_box.pack(fill="x", padx=20, pady=(4, 14))
-        if t.get("prompt"):
+        if td.get("prompt"):
             self.prompt_box.insert("end", t["prompt"])
 
         row = ctk.CTkFrame(self, fg_color="transparent")
@@ -2131,7 +2131,7 @@ class TaskDialog(ctk.CTkToplevel):
             row=0, column=0, sticky="w"
         )
         self.interval_var = ctk.StringVar(
-            value=t.get("interval", "once" if self.preset_date else "none")
+            value=td.get("interval", "once" if self.preset_date else "none")
         )
         ctk.CTkComboBox(
             row,
@@ -2149,7 +2149,7 @@ class TaskDialog(ctk.CTkToplevel):
         agents = cfg.get("agents", [])
         names = [a["name"] for a in agents]
         cur_name = names[0] if names else "Assistant"
-        if t.get("agent"):
+        if td.get("agent"):
             match = next((a for a in agents if a["id"] == t["agent"]), None)
             if match:
                 cur_name = match["name"]
@@ -2167,7 +2167,7 @@ class TaskDialog(ctk.CTkToplevel):
         ctk.CTkLabel(self, text=t("AI model"), font=F_BOLD, text_color=TEXT).pack(
             anchor="w", padx=20, pady=(8, 0)
         )
-        self.ai_var = ctk.StringVar(value=ai_label_for(t.get("ai_overrides")))
+        self.ai_var = ctk.StringVar(value=ai_label_for(td.get("ai_overrides")))
         ctk.CTkComboBox(
             self,
             variable=self.ai_var,
@@ -2187,7 +2187,7 @@ class TaskDialog(ctk.CTkToplevel):
             dt_row, text=t("Date (YYYY-MM-DD)"), font=F_BOLD, text_color=TEXT
         ).grid(row=0, column=0, sticky="w")
         default_date = (
-            t.get("run_date") or self.preset_date or date.today().strftime("%Y-%m-%d")
+            td.get("run_date") or self.preset_date or date.today().strftime("%Y-%m-%d")
         )
         self.date_var = ctk.StringVar(value=default_date)
         self._date_entry = ctk.CTkEntry(
@@ -2198,7 +2198,7 @@ class TaskDialog(ctk.CTkToplevel):
         ctk.CTkLabel(dt_row, text=t("Time (HH:MM)"), font=F_BOLD, text_color=TEXT).grid(
             row=0, column=1, sticky="w"
         )
-        self.time_var = ctk.StringVar(value=t.get("run_at", "09:00"))
+        self.time_var = ctk.StringVar(value=td.get("run_at", "09:00"))
         ctk.CTkEntry(dt_row, textvariable=self.time_var, height=36, font=F_BODY).grid(
             row=1, column=1, sticky="ew"
         )
@@ -2464,7 +2464,7 @@ class CalendarTab(ctk.CTkFrame):
             for c, d in enumerate(week):
                 in_month = d.month == self._month
                 count = sum(
-                    1 for t in tasks if t.get("enabled", True) and task_occurs_on(t, d)
+                    1 for t in tasks if td.get("enabled", True) and task_occurs_on(t, d)
                 )
                 self._day_cells[d] = self._make_cell(
                     r, c, d, in_month, d == today, count
@@ -2524,7 +2524,7 @@ class CalendarTab(ctk.CTkFrame):
         tasks = [
             t
             for t in cfg.get("tasks", [])
-            if t.get("enabled", True) and task_occurs_on(t, self._selected)
+            if td.get("enabled", True) and task_occurs_on(t, self._selected)
         ]
         if not tasks:
             ctk.CTkLabel(
@@ -2660,7 +2660,7 @@ class MemoryTab(ctk.CTkFrame):
                 "work": ACCENT,
                 "personal": WARNING,
                 "task": SUCCESS,
-            }.get(fact.get("category", "general"), MUTED)
+            }.get(factd.get("category", "general"), MUTED)
             ctk.CTkLabel(
                 row, text=f"●", font=F_BOLD, text_color=cat_color, width=20
             ).grid(row=0, column=0, padx=(12, 0), pady=12)
