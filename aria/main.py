@@ -27,6 +27,7 @@ except ImportError:
     sys.exit(1)
 
 from config import settings as cfg
+from config.i18n import t
 from agent.orchestrator import run_agent_in_thread, run_agent_sync
 from agent.scheduler import TaskScheduler
 from agent.messaging import MessagingService
@@ -3110,6 +3111,21 @@ class SettingsTab(ctk.CTkScrollableFrame):
             dropdown_fg_color=SURF2,
         ).pack(fill="x", pady=(4, 12))
 
+        lbl("Interface language (applies after restart)")
+        self._ui_lang_labels = {"en": "English", "sv": "Svenska"}
+        self._ui_lang_codes = {v: k for k, v in self._ui_lang_labels.items()}
+        self.ui_lang_var = ctk.StringVar(
+            value=self._ui_lang_labels.get(s.get("ui_language", "en"), "English")
+        )
+        ctk.CTkComboBox(
+            self,
+            variable=self.ui_lang_var,
+            height=38,
+            font=F_BODY,
+            values=list(self._ui_lang_labels.values()),
+            dropdown_fg_color=SURF2,
+        ).pack(fill="x", pady=(4, 12))
+
         section("Appearance")
         lbl("Theme (applies after restart)")
         self.theme_var = ctk.StringVar(value=s.get("theme", "dark"))
@@ -3405,7 +3421,7 @@ class SettingsTab(ctk.CTkScrollableFrame):
         self.dirty_lbl.pack(anchor="w", pady=(2, 2))
         ctk.CTkButton(
             self,
-            text="Save Settings",
+            text=t("Save Settings"),
             height=44,
             fg_color=ACCENT,
             hover_color="#8aa5ff",
@@ -3516,10 +3532,12 @@ class SettingsTab(ctk.CTkScrollableFrame):
             c.strip() for c in self.telegram_allow.get().split(",") if c.strip()
         ]
         theme_changed = s.get("theme") != self.theme_var.get()
+        orig_ui_lang = s.get("ui_language", "en")
         s["theme"] = self.theme_var.get()
         s["response_language"] = self._lang_codes.get(
             self.response_lang_var.get(), "auto"
         )
+        s["ui_language"] = self._ui_lang_codes.get(self.ui_lang_var.get(), "en")
         # Voice (text-to-speech)
         s["tts_enabled"] = self.tts_enabled_var.get()
         s["tts_voice"] = self._tts_voice_map.get(self.tts_voice_var.get(), "")
@@ -3543,9 +3561,10 @@ class SettingsTab(ctk.CTkScrollableFrame):
         # Reset the change-tracking baseline now that everything is persisted.
         self._snapshot = self._state()
         self._update_dirty()
+        ui_lang_changed = orig_ui_lang != s.get("ui_language")
         msg = "Settings saved!"
-        if theme_changed:
-            msg += "\n\nRestart ARIA to apply the new theme."
+        if theme_changed or ui_lang_changed:
+            msg += "\n\nRestart ARIA to apply theme/language changes."
         messagebox.showinfo("Saved", msg)
 
     def save_if_confirmed(self) -> bool:
@@ -3919,7 +3938,7 @@ class ARIAApp(ctk.CTk):
         for tab_id, icon, label in nav_items:
             btn = ctk.CTkButton(
                 sb,
-                text=f"  {icon}  {label}",
+                text=f"  {icon}  {t(label)}",
                 anchor="w",
                 height=44,
                 fg_color="transparent",
@@ -3943,10 +3962,10 @@ class ARIAApp(ctk.CTk):
         stat = ctk.CTkFrame(sb, fg_color=SURF2, corner_radius=10)
         stat.pack(fill="x", padx=10, pady=(4, 14))
         ctk.CTkLabel(
-            stat, text="STATUS", font=("Segoe UI Semibold", 9), text_color=MUTED
+            stat, text=t("STATUS"), font=("Segoe UI Semibold", 9), text_color=MUTED
         ).pack(anchor="w", padx=12, pady=(8, 2))
         self.status_lbl = ctk.CTkLabel(
-            stat, text="● Ready", font=F_SMALL, text_color=SUCCESS
+            stat, text=t("● Ready"), font=F_SMALL, text_color=SUCCESS
         )
         self.status_lbl.pack(anchor="w", padx=12)
         self.provider_lbl = ctk.CTkLabel(
