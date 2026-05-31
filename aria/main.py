@@ -2874,13 +2874,13 @@ class SettingsTab(ctk.CTkScrollableFrame):
         ).pack(anchor="w", pady=(0, 20))
 
         def section(title):
-            ctk.CTkLabel(self, text=title, font=F_HEAD, text_color=TEXT).pack(
+            ctk.CTkLabel(self, text=t(title), font=F_HEAD, text_color=TEXT).pack(
                 anchor="w", pady=(14, 0)
             )
             ctk.CTkFrame(self, fg_color=BORDER, height=1).pack(fill="x", pady=(4, 12))
 
         def lbl(text):
-            ctk.CTkLabel(self, text=text, font=F_BOLD, text_color=MUTED).pack(
+            ctk.CTkLabel(self, text=t(text), font=F_BOLD, text_color=MUTED).pack(
                 anchor="w"
             )
 
@@ -3450,6 +3450,8 @@ class SettingsTab(ctk.CTkScrollableFrame):
             "max_tokens": self.max_tokens.get(),
             "github_repo": self.github_repo.get(),
             "theme": self.theme_var.get(),
+            "response_language": self.response_lang_var.get(),
+            "ui_language": self.ui_lang_var.get(),
             "telegram_token": self.telegram_token.get(),
             "telegram_allow": self.telegram_allow.get(),
             "discord_webhook": self.discord_webhook.get(),
@@ -3476,6 +3478,11 @@ class SettingsTab(ctk.CTkScrollableFrame):
             self.max_tokens,
             self.github_repo,
             self.theme_var,
+            self.response_lang_var,
+            self.ui_lang_var,
+            self.tts_enabled_var,
+            self.tts_voice_var,
+            self.tts_rate_var,
             self.telegram_token,
             self.telegram_allow,
             self.discord_webhook,
