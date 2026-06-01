@@ -3353,8 +3353,9 @@ class WatchdogEditDialog(ctk.CTkToplevel):
         self.on_save = on_save
         self.watch = watch
         self.title("Edit watch" if watch else "New watch")
-        self.geometry("520x560")
-        self.resizable(False, False)
+        self.geometry("520x640")
+        self.minsize(480, 580)
+        self.resizable(True, True)
         self.configure(fg_color=SURFACE)
         self.grab_set()
         self._build()
@@ -3437,13 +3438,13 @@ class WatchdogEditDialog(ctk.CTkToplevel):
         ).pack(anchor="w", padx=20)
         self.prompt_box = ctk.CTkTextbox(
             self,
-            height=110,
+            height=85,
             font=F_BODY,
             fg_color=SURF2,
             text_color=TEXT,
             border_width=0,
         )
-        self.prompt_box.pack(fill="x", padx=20, pady=(4, 12))
+        self.prompt_box.pack(fill="x", padx=20, pady=(4, 8))
         if w.get("prompt"):
             self.prompt_box.insert("end", w["prompt"])
 
