@@ -93,6 +93,9 @@ DEFAULTS = {
             "text": "Review this code and list any bugs or issues:\n\n",
         },
     ],
+    # Learned skills: reusable multi-step workflows saved from successful chats.
+    # Each: {id, name, description, prompt, created}.
+    "skills": [],
     "tasks": [],
     "agents": [
         {

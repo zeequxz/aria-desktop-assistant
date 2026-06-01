@@ -311,6 +311,7 @@ class ChatTab(ctk.CTkFrame):
         self.active_agent = None
         self.orch = None
         self._streaming = False
+        self._turn_used_tools = False
         self._pending_file = None
         self._pending_screenshot = False
         self._voice = None
@@ -461,6 +462,7 @@ class ChatTab(ctk.CTkFrame):
             ("📁", self._attach_file, "Attach a file (text, code, Word, Excel…)"),
             ("🎤", self._toggle_voice, "Voice input — speak instead of typing"),
             ("📝", self._open_prompt_library, "Prompt library — insert a saved prompt"),
+            ("🧩", self._open_skills, "Skills — run a saved workflow"),
             ("📋", self._copy_chat, "Copy this conversation to the clipboard"),
             ("⬇", self._export_chat, "Export this conversation to a file"),
             ("✎", self._edit_agents, "Manage agents (add / edit / delete)"),
@@ -531,6 +533,39 @@ class ChatTab(ctk.CTkFrame):
             font=F_SMALL,
             text_color=DANGER,
         ).pack(side="left", padx=10)
+
+        # "Save as skill" offer (shown after a successful multi-step turn).
+        self.skill_bar = ctk.CTkFrame(right, fg_color=SURF2, corner_radius=8, height=34)
+        self.skill_bar.grid(row=6, column=0, sticky="ew", padx=12, pady=(0, 4))
+        self.skill_bar.grid_remove()
+        ctk.CTkLabel(
+            self.skill_bar,
+            text=t("💡 Save these steps as a reusable skill?"),
+            font=F_SMALL,
+            text_color=TEXT,
+        ).pack(side="left", padx=12, pady=4)
+        ctk.CTkButton(
+            self.skill_bar,
+            text=t("✕"),
+            width=28,
+            height=26,
+            fg_color="transparent",
+            hover_color=tint(DANGER, 0x33),
+            text_color=MUTED,
+            font=F_SMALL,
+            command=self.skill_bar.grid_remove,
+        ).pack(side="right", padx=(0, 6), pady=4)
+        ctk.CTkButton(
+            self.skill_bar,
+            text=t("Save skill"),
+            width=90,
+            height=26,
+            fg_color=tint(SUCCESS, 0x33),
+            hover_color=tint(SUCCESS, 0x55),
+            text_color=SUCCESS,
+            font=F_SMALL,
+            command=self._save_current_as_skill,
+        ).pack(side="right", padx=6, pady=4)
 
         # Input
         inp_frame = ctk.CTkFrame(right, fg_color=SURF2, corner_radius=12)
@@ -1035,6 +1070,7 @@ class ChatTab(ctk.CTkFrame):
 
         self.history_msgs.append({"role": "user", "content": content})
         self._append_msg("user", text)
+        self.skill_bar.grid_remove()
         self._run_agent()
 
     # ── Slash commands ───────────────────────────────────────────────────────
@@ -1095,6 +1131,45 @@ class ChatTab(ctk.CTkFrame):
         self.input_box.delete("1.0", "end")
         self.input_box.insert("end", prompt_text)
         self.input_box.focus_set()
+
+    # ── Skills (learned reusable workflows) ──────────────────────────────────
+
+    def _open_skills(self):
+        SkillsDialog(self.root, on_run=self._run_skill)
+
+    def _run_skill(self, skill):
+        """Load a saved skill's prompt into the input box, ready to run/edit."""
+        self.input_box.delete("1.0", "end")
+        self.input_box.insert("end", skill.get("prompt", ""))
+        self.input_box.focus_set()
+
+    def _save_current_as_skill(self):
+        """Distil the current conversation into a reusable skill (async)."""
+        self.skill_bar.grid_remove()
+        msgs = list(self.history_msgs)
+        self.tool_bar.grid()
+        self.tool_lbl.configure(text=t("💡 Summarising into a skill…"))
+
+        def work():
+            from agent import skills
+
+            result = skills.summarize_to_skill(msgs)
+            on_main(self.root, lambda: self._on_skill_summarized(result))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_skill_summarized(self, result):
+        self.tool_bar.grid_remove()
+        if "error" in result:
+            messagebox.showwarning("Skill", result["error"])
+            return
+        SkillEditDialog(self.root, result, on_save=self._commit_skill)
+
+    def _commit_skill(self, name, description, prompt):
+        from agent import skills
+
+        skills.add_skill(name, prompt, description)
+        self.on_notify("ARIA", f"Skill '{name}' saved.")
 
     def _regenerate(self):
         """Re-run the agent on the last user turn, discarding the last reply.
@@ -1159,6 +1234,7 @@ class ChatTab(ctk.CTkFrame):
         self.msg_box.see("end")
 
     def _on_tool_call(self, name, inp):
+        self._turn_used_tools = True
         friendly = name.replace("_", " ").title()
         self.tool_bar.grid()
         self.tool_lbl.configure(text=f"⚙  {friendly}…")
@@ -1186,6 +1262,9 @@ class ChatTab(ctk.CTkFrame):
                 rate=cfg.get("tts_rate", 175),
                 voice_id=cfg.get("tts_voice", "") or None,
             )
+        # Offer to save a reusable skill after a successful multi-step turn.
+        if self._turn_used_tools and len(self.history_msgs) >= 2:
+            self.skill_bar.grid()
         self.on_notify("ARIA", "Response ready")
 
     def _on_error(self, err):
@@ -2065,6 +2144,176 @@ class PromptLibraryDialog(ctk.CTkToplevel):
             prompts.pop(idx)
             cfg.set_key("prompt_library", prompts)
             self._refresh()
+
+
+class SkillEditDialog(ctk.CTkToplevel):
+    """Review/edit a freshly summarised skill before saving it."""
+
+    def __init__(self, master, draft, on_save):
+        super().__init__(master)
+        self.draft = draft or {}
+        self.on_save = on_save
+        self.title("Save Skill")
+        self.geometry("480x460")
+        self.configure(fg_color=SURFACE)
+        self.grab_set()
+        self._build()
+
+    def _build(self):
+        ctk.CTkLabel(
+            self, text=t("💡 Save as skill"), font=F_HEAD, text_color=TEXT
+        ).pack(anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(
+            self,
+            text=t("Review and save this reusable workflow."),
+            font=F_SMALL,
+            text_color=MUTED,
+        ).pack(anchor="w", padx=20, pady=(0, 10))
+
+        ctk.CTkLabel(self, text=t("Name"), font=F_BOLD, text_color=TEXT).pack(
+            anchor="w", padx=20
+        )
+        self.name_var = ctk.StringVar(value=self.draft.get("name", ""))
+        ctk.CTkEntry(self, textvariable=self.name_var, height=36, font=F_BODY).pack(
+            fill="x", padx=20, pady=(4, 10)
+        )
+
+        ctk.CTkLabel(self, text=t("Description"), font=F_BOLD, text_color=TEXT).pack(
+            anchor="w", padx=20
+        )
+        self.desc_var = ctk.StringVar(value=self.draft.get("description", ""))
+        ctk.CTkEntry(self, textvariable=self.desc_var, height=36, font=F_BODY).pack(
+            fill="x", padx=20, pady=(4, 10)
+        )
+
+        ctk.CTkLabel(
+            self,
+            text=t("Skill prompt ({input} = your subject)"),
+            font=F_BOLD,
+            text_color=TEXT,
+        ).pack(anchor="w", padx=20)
+        self.prompt_box = ctk.CTkTextbox(
+            self,
+            height=140,
+            font=F_SMALL,
+            fg_color=SURF2,
+            text_color=TEXT,
+            border_width=0,
+        )
+        self.prompt_box.pack(fill="both", expand=True, padx=20, pady=(4, 12))
+        self.prompt_box.insert("end", self.draft.get("prompt", ""))
+
+        ctk.CTkButton(
+            self,
+            text=t("Save skill"),
+            height=40,
+            fg_color=ACCENT,
+            hover_color="#8aa5ff",
+            text_color="white",
+            font=F_BOLD,
+            command=self._save,
+        ).pack(fill="x", padx=20, pady=(0, 16))
+
+    def _save(self):
+        name = self.name_var.get().strip()
+        prompt = self.prompt_box.get("1.0", "end").strip()
+        if not name or not prompt:
+            messagebox.showwarning("Missing info", "Name and prompt are required.")
+            return
+        self.on_save(name, self.desc_var.get().strip(), prompt)
+        self.destroy()
+
+
+class SkillsDialog(ctk.CTkToplevel):
+    """Browse, run, and delete learned skills."""
+
+    def __init__(self, master, on_run):
+        super().__init__(master)
+        self.on_run = on_run
+        self.title("Skills")
+        self.geometry("480x520")
+        self.configure(fg_color=SURFACE)
+        self.grab_set()
+        self._build()
+
+    def _build(self):
+        ctk.CTkLabel(self, text=t("🧩 Skills"), font=F_HEAD, text_color=TEXT).pack(
+            anchor="w", padx=20, pady=(18, 2)
+        )
+        ctk.CTkLabel(
+            self,
+            text=t("Reusable workflows ARIA learned from past tasks."),
+            font=F_SMALL,
+            text_color=MUTED,
+        ).pack(anchor="w", padx=20, pady=(0, 10))
+        self.list_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.list_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self._refresh()
+
+    def _refresh(self):
+        from agent import skills
+
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        items = skills.list_skills()
+        if not items:
+            ctk.CTkLabel(
+                self.list_frame,
+                text=t(
+                    "No skills yet. Finish a multi-step task and click 'Save skill'."
+                ),
+                font=F_BODY,
+                text_color=MUTED,
+                wraplength=400,
+                justify="left",
+            ).pack(pady=20)
+            return
+        for sk in items:
+            row = ctk.CTkFrame(self.list_frame, fg_color=SURF2, corner_radius=10)
+            row.pack(fill="x", pady=3)
+            row.columnconfigure(0, weight=1)
+            ctk.CTkButton(
+                row,
+                text=sk.get("name", "Skill"),
+                anchor="w",
+                fg_color="transparent",
+                hover_color=SURF3,
+                text_color=TEXT,
+                font=F_BOLD,
+                height=30,
+                command=lambda s=sk: self._run(s),
+            ).grid(row=0, column=0, sticky="ew", padx=(8, 0), pady=(6, 0))
+            ctk.CTkButton(
+                row,
+                text=t("✕"),
+                width=28,
+                height=28,
+                fg_color="transparent",
+                hover_color=tint(DANGER, 0x33),
+                text_color=DANGER,
+                font=F_SMALL,
+                command=lambda s=sk: self._delete(s),
+            ).grid(row=0, column=1, rowspan=2, padx=4)
+            desc = sk.get("description", "") or sk.get("prompt", "")[:60]
+            ctk.CTkLabel(
+                row,
+                text=desc,
+                font=F_SMALL,
+                text_color=MUTED,
+                anchor="w",
+                wraplength=380,
+                justify="left",
+            ).grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+
+    def _run(self, skill):
+        self.on_run(skill)
+        self.destroy()
+
+    def _delete(self, skill):
+        from agent import skills
+
+        skills.delete_skill(skill.get("id"))
+        self._refresh()
 
 
 class TaskDialog(ctk.CTkToplevel):
