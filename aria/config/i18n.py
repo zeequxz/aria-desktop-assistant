@@ -68,6 +68,10 @@ SV = {
     # ── Projects dialog ──────────────────────────────────────────────────
     "📁 Projects": "📁 Projekt",
     "Group related chats together.": "Gruppera relaterade chattar.",
+    "Group related chats, each with an optional working folder.": "Gruppera relaterade chattar, var och en med en valfri arbetsmapp.",
+    "Folder": "Mapp",
+    "No folder set": "Ingen mapp angiven",
+    "No working folder": "Ingen arbetsmapp",
     "New project name": "Nytt projektnamn",
     "Add": "Lägg till",
     "Rename": "Byt namn",

@@ -58,7 +58,10 @@ def _result(proc) -> dict:
 
 
 def _workdir() -> str:
-    return cfg.get("workspace_folder", str(Path.home()))
+    # Prefer the active project's folder (Claude-Code-style), else the global
+    # workspace folder, else home.
+    folder = cfg.active_project_folder()
+    return folder or str(Path.home())
 
 
 def run_python(code: str) -> dict:

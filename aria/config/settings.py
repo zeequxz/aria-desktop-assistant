@@ -72,8 +72,10 @@ DEFAULTS = {
     "auto_check_updates": True,
     "github_repo": "",
     # Projects group related chats (like Codex/Claude). Every chat belongs to
-    # one. "general" always exists as the default.
-    "projects": [{"id": "general", "name": "General"}],
+    # one. "general" always exists as the default. A project may have an optional
+    # "folder" — its working directory, like a Claude Code project — used as the
+    # cwd for the code runner and surfaced to the agent.
+    "projects": [{"id": "general", "name": "General", "folder": ""}],
     "active_project": "general",
     "prompt_library": [
         {
@@ -171,6 +173,17 @@ def save(settings: dict):
 def get(key: str, default=None):
     s = load()
     return s.get(key, default)
+
+
+def active_project_folder() -> str:
+    """Return the active project's working folder, falling back to the global
+    workspace folder when the project has none set."""
+    s = load()
+    active = s.get("active_project", "general")
+    proj = next((p for p in s.get("projects", []) if p.get("id") == active), None)
+    if proj and proj.get("folder"):
+        return proj["folder"]
+    return s.get("workspace_folder", "")
 
 
 def set_key(key: str, value):

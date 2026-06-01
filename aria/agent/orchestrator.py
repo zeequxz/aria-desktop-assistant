@@ -136,6 +136,16 @@ class AgentOrchestrator:
         if memory_text:
             system_prompt = f"{system_prompt}\n\n{memory_text}"
 
+        # If the active project has a working folder, tell the agent so it works
+        # there by default (like a Claude Code project directory).
+        proj_folder = cfg.active_project_folder()
+        if proj_folder:
+            system_prompt += (
+                f"\n\nThe current project's working folder is: {proj_folder}\n"
+                "Use this as the base directory for file operations and commands "
+                "unless the user specifies another path."
+            )
+
         # Reply-language directive.
         lang = s.get("response_language", "auto")
         if lang == "sv":

@@ -358,8 +358,11 @@ class ChatTab(ctk.CTkFrame):
         Tooltip(mgr_btn, "Manage projects (add / rename / delete)")
 
         self.project_var = ctk.StringVar()
+        proj_box = ctk.CTkFrame(left, fg_color="transparent")
+        proj_box.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
+        proj_box.columnconfigure(0, weight=1)
         self.project_menu = ctk.CTkOptionMenu(
-            left,
+            proj_box,
             variable=self.project_var,
             font=F_BODY,
             height=34,
@@ -369,7 +372,17 @@ class ChatTab(ctk.CTkFrame):
             dropdown_fg_color=SURF2,
             command=self._on_project_change,
         )
-        self.project_menu.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
+        self.project_menu.grid(row=0, column=0, sticky="ew")
+        self.project_folder_lbl = ctk.CTkLabel(
+            proj_box,
+            text="",
+            font=("Segoe UI", 9),
+            text_color=MUTED,
+            anchor="w",
+            wraplength=190,
+            justify="left",
+        )
+        self.project_folder_lbl.grid(row=1, column=0, sticky="ew", pady=(2, 0))
 
         new_chat = ctk.CTkButton(
             left,
@@ -724,6 +737,12 @@ class ChatTab(ctk.CTkFrame):
         )
         self.active_project = active["id"]
         self.project_var.set(active["name"])
+        folder = active.get("folder", "")
+        if hasattr(self, "project_folder_lbl"):
+            self.project_folder_lbl.configure(
+                text=("📂 " + folder) if folder else t("No working folder"),
+                text_color=ACCENT if folder else MUTED,
+            )
 
     def _on_project_change(self, name):
         proj = self._projects_by_name.get(name)
@@ -731,6 +750,7 @@ class ChatTab(ctk.CTkFrame):
             return
         self.active_project = proj["id"]
         cfg.set_key("active_project", self.active_project)
+        self._refresh_projects()  # update the folder indicator
         # Switching project starts a fresh chat view scoped to it.
         self._new_chat(save_current=True)
         self._refresh_history()
@@ -1635,7 +1655,7 @@ class ProjectManagerDialog(ctk.CTkToplevel):
         )
         ctk.CTkLabel(
             self,
-            text=t("Group related chats together."),
+            text=t("Group related chats, each with an optional working folder."),
             font=F_SMALL,
             text_color=MUTED,
         ).pack(anchor="w", padx=20, pady=(0, 10))
@@ -1671,45 +1691,88 @@ class ProjectManagerDialog(ctk.CTkToplevel):
             row = ctk.CTkFrame(self.list_frame, fg_color=SURF2, corner_radius=8)
             row.pack(fill="x", pady=3)
             row.columnconfigure(0, weight=1)
+            top = ctk.CTkFrame(row, fg_color="transparent")
+            top.grid(row=0, column=0, sticky="ew", padx=2, pady=(2, 0))
+            top.columnconfigure(0, weight=1)
             ctk.CTkLabel(
-                row, text=p["name"], font=F_BODY, text_color=TEXT, anchor="w"
-            ).grid(row=0, column=0, sticky="ew", padx=10, pady=8)
+                top, text=p["name"], font=F_BODY, text_color=TEXT, anchor="w"
+            ).grid(row=0, column=0, sticky="ew", padx=8, pady=4)
+            ctk.CTkButton(
+                top,
+                text=t("Folder"),
+                width=64,
+                height=26,
+                fg_color=SURF3,
+                hover_color=BORDER,
+                text_color=TEXT,
+                font=F_SMALL,
+                command=lambda pr=p: self._set_folder(pr),
+            ).grid(row=0, column=1, padx=2)
             if p["id"] != "general":
                 ctk.CTkButton(
-                    row,
+                    top,
                     text=t("Rename"),
-                    width=70,
-                    height=28,
+                    width=64,
+                    height=26,
                     fg_color=SURF3,
                     hover_color=BORDER,
                     text_color=TEXT,
                     font=F_SMALL,
                     command=lambda pr=p: self._rename(pr),
-                ).grid(row=0, column=1, padx=2)
+                ).grid(row=0, column=2, padx=2)
                 ctk.CTkButton(
-                    row,
+                    top,
                     text=t("✕"),
                     width=28,
-                    height=28,
+                    height=26,
                     fg_color="transparent",
                     hover_color=tint(DANGER, 0x33),
                     text_color=DANGER,
                     font=F_SMALL,
                     command=lambda pr=p: self._delete(pr),
-                ).grid(row=0, column=2, padx=(2, 8))
+                ).grid(row=0, column=3, padx=(2, 4))
             else:
                 ctk.CTkLabel(
-                    row, text=t("default"), font=F_SMALL, text_color=MUTED
-                ).grid(row=0, column=1, padx=(0, 12))
+                    top, text=t("default"), font=F_SMALL, text_color=MUTED
+                ).grid(row=0, column=2, padx=(0, 8))
+            folder = p.get("folder", "")
+            ctk.CTkLabel(
+                row,
+                text=("📂 " + folder) if folder else t("No folder set"),
+                font=("Segoe UI", 9),
+                text_color=ACCENT if folder else MUTED,
+                anchor="w",
+                wraplength=360,
+                justify="left",
+            ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
 
     def _add(self):
         name = self.new_name.get().strip()
         if not name:
             return
         projects = cfg.get("projects", [])
-        projects.append({"id": f"proj_{uuid.uuid4().hex[:8]}", "name": name})
+        projects.append(
+            {"id": f"proj_{uuid.uuid4().hex[:8]}", "name": name, "folder": ""}
+        )
         cfg.set_key("projects", projects)
         self.new_name.delete(0, "end")
+        self._refresh()
+        self.on_changed()
+
+    def _set_folder(self, proj):
+        from tkinter import filedialog
+
+        current = proj.get("folder", "") or str(Path.home())
+        folder = filedialog.askdirectory(
+            title=f"Working folder for '{proj['name']}'", initialdir=current
+        )
+        if folder is None or folder == "":
+            return
+        projects = cfg.get("projects", [])
+        for p in projects:
+            if p["id"] == proj["id"]:
+                p["folder"] = folder
+        cfg.set_key("projects", projects)
         self._refresh()
         self.on_changed()
 
