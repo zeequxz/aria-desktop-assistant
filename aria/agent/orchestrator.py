@@ -75,15 +75,17 @@ def _build_tool_registry(
         tools.update(BROWSER_TOOLS)
         schemas += BROWSER_TOOL_SCHEMAS
 
-    # Advanced mode: multi-agent orchestration (delegate to other agents).
+    # Advanced mode: multi-agent orchestration + planning checklist.
     if advanced:
         from agent.orchestration import (
             ORCHESTRATION_TOOLS,
             ORCHESTRATION_TOOL_SCHEMAS,
         )
+        from agent.planning import PLANNING_TOOLS, PLANNING_TOOL_SCHEMAS
 
         tools.update(ORCHESTRATION_TOOLS)
-        schemas += ORCHESTRATION_TOOL_SCHEMAS
+        tools.update(PLANNING_TOOLS)
+        schemas += ORCHESTRATION_TOOL_SCHEMAS + PLANNING_TOOL_SCHEMAS
 
     return tools, schemas
 
@@ -137,15 +139,16 @@ class AgentOrchestrator:
         elif lang == "auto":
             system_prompt += "\n\nRespond in the same language the user writes in."
 
-        # Advanced mode: tell the agent it can coordinate other agents.
+        # Advanced mode: tell the agent it can plan and coordinate other agents.
         if s.get("advanced_mode", False):
             system_prompt += (
-                "\n\nADVANCED MODE: You can orchestrate other specialist agents to "
-                "tackle complex, multi-step builds. Use list_agents to see who's "
-                "available and delegate_to_agent to assign a self-contained sub-task "
-                "to the best-suited agent (e.g. research, writing, file work). Plan "
-                "the work, delegate parts in parallel where sensible, then combine "
-                "their results into the final deliverable. Do simple tasks yourself."
+                "\n\nADVANCED MODE: For complex, multi-step jobs, first call "
+                "create_plan with the steps you intend to take, then update_plan "
+                "('doing'/'done') as you progress so the user can follow along. You "
+                "can also orchestrate other specialist agents: use list_agents to "
+                "see who's available and delegate_to_agent to assign a self-contained "
+                "sub-task to the best-suited agent (e.g. research, writing, file "
+                "work), then combine their results. Do simple tasks yourself."
             )
 
         try:

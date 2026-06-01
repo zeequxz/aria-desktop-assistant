@@ -1194,6 +1194,13 @@ class ChatTab(ctk.CTkFrame):
     def _run_agent(self):
         """Start the agent on the current history. Shared by send/regenerate."""
         self._set_busy(True)
+        # Start each turn with a clean planning checklist (advanced mode).
+        try:
+            from agent import planning
+
+            planning.clear_plan()
+        except Exception:
+            pass
         agent = self.active_agent
         use_computer = agent["id"] == "computer" or cfg.get(
             "computer_use_enabled", False
