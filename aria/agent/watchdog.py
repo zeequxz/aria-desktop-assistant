@@ -173,10 +173,31 @@ class WatchdogService:
             return  # no change or unreachable
 
         # Change detected — run the agent and push a notification.
-        change_desc = f"{watch['type']} '{watch['target']}' changed"
-        prompt = watch.get("prompt", "Describe what changed.").replace(
-            "{change}", change_desc
+        target = watch.get("target", "")
+        wtype = watch.get("type", "file")
+        change_desc = f"{wtype} '{target}' changed"
+
+        # Expand all supported placeholders so the user's prompt can reference
+        # the watched location without needing to hard-code the path.
+        raw_prompt = watch.get("prompt", "Describe what changed.")
+        prompt = (
+            raw_prompt
+            .replace("{change}", change_desc)
+            .replace("{target}", target)
+            .replace("{path}", target)
+            .replace("{folder}", target)
+            .replace("{url}", target)
         )
+
+        # Always prepend a context block so the agent knows exactly what was
+        # being watched and where, even if the prompt doesn't use placeholders.
+        context_header = (
+            f"[Watchdog alert]\n"
+            f"Type: {wtype}\n"
+            f"Location: {target}\n"
+            f"Status: change detected\n\n"
+        )
+        full_prompt = context_header + prompt
 
         from agent.orchestrator import run_agent_sync
         from agent import notifications
@@ -189,7 +210,7 @@ class WatchdogService:
         system = agent["system"] if agent else "You are a helpful assistant."
 
         result = run_agent_sync(
-            prompt,
+            full_prompt,
             system_prompt=system,
             use_computer_tools=False,
             use_browser_tools=True,

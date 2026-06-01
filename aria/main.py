@@ -3276,6 +3276,20 @@ class WatchdogTab(ctk.CTkFrame):
 
             ctk.CTkButton(
                 btns,
+                text=t("▶ Run"),
+                width=70,
+                height=28,
+                fg_color=tint(SUCCESS, 0x22),
+                hover_color=tint(SUCCESS, 0x44),
+                text_color=SUCCESS,
+                border_color=tint(SUCCESS, 0x88),
+                border_width=1,
+                font=F_SMALL,
+                command=lambda ww=w: self._run_now(ww),
+            ).pack(pady=2)
+
+            ctk.CTkButton(
+                btns,
                 text=t("Edit"),
                 width=70,
                 height=28,
@@ -3299,6 +3313,30 @@ class WatchdogTab(ctk.CTkFrame):
                 font=F_SMALL,
                 command=lambda ww=w: self._delete(ww),
             ).pack(pady=2)
+
+    def _run_now(self, watch):
+        """Manually trigger a watch immediately — force a re-baseline and fire."""
+        import threading
+        from agent import watchdog as wd
+
+        # Reset last_seen so the next check fires unconditionally.
+        watches = cfg.get("watchdog_watches", [])
+        for w in watches:
+            if w.get("id") == watch.get("id"):
+                w["last_seen"] = None
+        cfg.set_key("watchdog_watches", watches)
+
+        def go():
+            # Re-load the watch from settings (gets the cleared last_seen)
+            fresh = next(
+                (w for w in cfg.get("watchdog_watches", []) if w.get("id") == watch.get("id")),
+                watch,
+            )
+            if SERVICE := wd.SERVICE:
+                SERVICE._check_one(fresh)
+            on_main(self.master, self._refresh)
+
+        threading.Thread(target=go, daemon=True).start()
 
     def _toggle(self, watch):
         from agent import watchdog as wd
@@ -3432,7 +3470,7 @@ class WatchdogEditDialog(ctk.CTkToplevel):
         ).pack(anchor="w", padx=20)
         ctk.CTkLabel(
             self,
-            text=t("Use {change} for a brief description of what changed."),
+            text=t("Placeholders: {target} = the watched path, {change} = what changed."),
             font=F_SMALL,
             text_color=MUTED,
         ).pack(anchor="w", padx=20)
@@ -3506,7 +3544,7 @@ class WatchdogEditDialog(ctk.CTkToplevel):
                 "type": self.type_var.get(),
                 "target": target,
                 "prompt": prompt
-                or "Something changed in {change} — summarise what happened.",
+                or "Something changed in {target}. Describe what changed and take any appropriate action.",
                 "agent_id": agent_id,
                 "enabled": base.get("enabled", True),
                 "last_seen": base.get("last_seen"),

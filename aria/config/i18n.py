@@ -158,7 +158,7 @@ SV = {
     "Type": "Typ",
     "Target (path or URL)": "Mål (sökväg eller URL)",
     "What should ARIA do when it changes?": "Vad ska ARIA göra när det ändras?",
-    "Use {change} for a brief description of what changed.": "Använd {change} för en kort beskrivning av vad som ändrades.",
+    "Placeholders: {target} = the watched path, {change} = what changed.": "Platshållare: {target} = den bevakade sökvägen, {change} = vad som ändrades.",
     "Create watch": "Skapa bevakning",
     "Save watch": "Spara bevakning",
     "No notifications yet.": "Inga aviseringar ännu.",
