@@ -1704,8 +1704,8 @@ class TasksTab(ctk.CTkFrame):
     def _on_saved(self, data):
         tasks = cfg.get("tasks", [])
         # Upsert: replace an existing task with the same id, else append.
-        for i, t in enumerate(tasks):
-            if td.get("id") == data.get("id"):
+        for i, task in enumerate(tasks):
+            if task.get("id") == data.get("id"):
                 tasks[i] = data
                 break
         else:
