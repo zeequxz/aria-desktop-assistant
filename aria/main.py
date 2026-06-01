@@ -52,32 +52,34 @@ except ImportError:
 # (Switching applies on restart, since widgets read these as module constants.)
 _THEMES = {
     "dark": {
-        "BG": "#0d0d14",
-        "SURFACE": "#13131e",
-        "SURF2": "#1a1a28",
-        "SURF3": "#20202f",
-        "BORDER": "#252535",
-        "ACCENT": "#6c8fff",
-        "SUCCESS": "#5dba7d",
-        "WARNING": "#e8b84b",
-        "DANGER": "#e05c5c",
-        "TEXT": "#e4e4f0",
-        "MUTED": "#6a6a85",
-        "PURPLE": "#9b72ff",
+        # Modern deep-navy dark theme — richer than pure black, easier on eyes
+        "BG": "#0e0f1a",
+        "SURFACE": "#141520",
+        "SURF2": "#1b1d2e",
+        "SURF3": "#22253a",
+        "BORDER": "#2a2d45",
+        "ACCENT": "#7c9eff",  # slightly brighter, more vibrant blue
+        "SUCCESS": "#4ecb83",
+        "WARNING": "#f0c060",
+        "DANGER": "#e06060",
+        "TEXT": "#e8e9f4",
+        "MUTED": "#6b6e90",
+        "PURPLE": "#a07aff",
     },
     "light": {
-        "BG": "#f4f5fb",
+        # Clean neutral-white light theme with good contrast
+        "BG": "#f0f1f8",
         "SURFACE": "#ffffff",
-        "SURF2": "#eef0f7",
-        "SURF3": "#e3e6f0",
-        "BORDER": "#d4d8e6",
-        "ACCENT": "#4665e0",
-        "SUCCESS": "#2f9e5e",
-        "WARNING": "#b8860b",
-        "DANGER": "#c84444",
-        "TEXT": "#1a1c28",
-        "MUTED": "#7a7f95",
-        "PURPLE": "#7d4ee0",
+        "SURF2": "#f5f6fc",
+        "SURF3": "#eaecf5",
+        "BORDER": "#dde0f0",
+        "ACCENT": "#4a6cf7",
+        "SUCCESS": "#279e5a",
+        "WARNING": "#c47f00",
+        "DANGER": "#c43a3a",
+        "TEXT": "#151724",
+        "MUTED": "#777a9a",
+        "PURPLE": "#7040d8",
     },
 }
 
@@ -198,10 +200,11 @@ def tint(hex_color, alpha):
 
 F_BODY = ("Segoe UI", 13)
 F_SMALL = ("Segoe UI", 11)
-F_BOLD = ("Segoe UI Semibold", 13)
-F_HEAD = ("Segoe UI Semibold", 16)
+F_BOLD = ("Segoe UI Semibold", 14)  # slightly larger for cleaner hierarchy
+F_HEAD = ("Segoe UI Semibold", 17)
 F_TITLE = ("Segoe UI Bold", 22)
 F_MONO = ("Cascadia Code", 12)
+F_TAG = ("Segoe UI", 10)  # small pill/badge text
 
 
 def on_main(root, fn):
@@ -3150,6 +3153,369 @@ class MemoryTab(ctk.CTkFrame):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+class WatchdogTab(ctk.CTkFrame):
+    """Manage watchdog monitors — files, folders, and URLs."""
+
+    def __init__(self, master, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self._build()
+        self._refresh()
+
+    def _build(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        # Header bar
+        top = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14, height=58)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        top.grid_propagate(False)
+        ctk.CTkLabel(top, text=t("Watchdog"), font=F_TITLE, text_color=TEXT).pack(
+            side="left", padx=18
+        )
+        ctk.CTkLabel(
+            top,
+            text=t("Trigger agents when files, folders, or URLs change"),
+            font=F_SMALL,
+            text_color=MUTED,
+        ).pack(side="left")
+        ctk.CTkButton(
+            top,
+            text=t("+ New watch"),
+            width=120,
+            height=34,
+            fg_color=ACCENT,
+            hover_color=tint(ACCENT, 0xCC),
+            text_color="white",
+            font=F_BOLD,
+            command=self._new_watch,
+        ).pack(side="right", padx=14)
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color=SURFACE, corner_radius=14)
+        self.scroll.grid(row=1, column=0, sticky="nsew")
+
+    def _refresh(self):
+        from agent import watchdog
+
+        for w in self.scroll.winfo_children():
+            w.destroy()
+
+        watches = watchdog.list_watches()
+        if not watches:
+            ctk.CTkLabel(
+                self.scroll,
+                text=t(
+                    "No watches yet. Click '+ New watch' to monitor a file, folder, or URL."
+                ),
+                font=F_BODY,
+                text_color=MUTED,
+                wraplength=500,
+                justify="left",
+            ).pack(pady=40, padx=20)
+            return
+
+        _TYPE_ICON = {"file": "📄", "folder": "📂", "url": "🌐"}
+        for w in watches:
+            card = ctk.CTkFrame(self.scroll, fg_color=SURF2, corner_radius=12)
+            card.pack(fill="x", padx=10, pady=4)
+            card.columnconfigure(1, weight=1)
+
+            icon = _TYPE_ICON.get(w.get("type", ""), "📄")
+            ctk.CTkLabel(
+                card, text=icon, font=("Segoe UI", 22), width=44, text_color=ACCENT
+            ).grid(row=0, column=0, rowspan=2, padx=(12, 0), pady=10)
+
+            # Name + type badge
+            top_row = ctk.CTkFrame(card, fg_color="transparent")
+            top_row.grid(row=0, column=1, sticky="ew", padx=8, pady=(10, 0))
+            top_row.columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                top_row,
+                text=w.get("name", "Watch"),
+                font=F_BOLD,
+                text_color=TEXT,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w")
+            enabled = w.get("enabled", True)
+            badge_col = SUCCESS if enabled else MUTED
+            ctk.CTkLabel(
+                top_row,
+                text=("● active" if enabled else "○ paused"),
+                font=F_TAG,
+                text_color=badge_col,
+            ).grid(row=0, column=1, sticky="e", padx=(0, 4))
+
+            # Target path / URL
+            target = w.get("target", "")[:80]
+            ctk.CTkLabel(
+                card,
+                text=target,
+                font=F_SMALL,
+                text_color=MUTED,
+                anchor="w",
+                wraplength=480,
+                justify="left",
+            ).grid(row=1, column=1, sticky="w", padx=8, pady=(0, 8))
+
+            # Action buttons
+            btns = ctk.CTkFrame(card, fg_color="transparent")
+            btns.grid(row=0, column=2, rowspan=2, padx=10, pady=8)
+
+            # Toggle enabled
+            tog_text = t("Pause") if enabled else t("Resume")
+            ctk.CTkButton(
+                btns,
+                text=tog_text,
+                width=70,
+                height=28,
+                fg_color=SURF3,
+                hover_color=BORDER,
+                text_color=TEXT,
+                font=F_SMALL,
+                command=lambda ww=w: self._toggle(ww),
+            ).pack(pady=2)
+
+            ctk.CTkButton(
+                btns,
+                text=t("Edit"),
+                width=70,
+                height=28,
+                fg_color=SURF3,
+                hover_color=BORDER,
+                text_color=TEXT,
+                font=F_SMALL,
+                command=lambda ww=w: self._edit_watch(ww),
+            ).pack(pady=2)
+
+            ctk.CTkButton(
+                btns,
+                text=t("✕"),
+                width=30,
+                height=28,
+                fg_color=tint(DANGER, 0x22),
+                hover_color=tint(DANGER, 0x44),
+                text_color=DANGER,
+                border_color=tint(DANGER, 0x88),
+                border_width=1,
+                font=F_SMALL,
+                command=lambda ww=w: self._delete(ww),
+            ).pack(pady=2)
+
+    def _toggle(self, watch):
+        from agent import watchdog as wd
+        from config import settings as cfg
+
+        watches = cfg.get("watchdog_watches", [])
+        for w in watches:
+            if w.get("id") == watch.get("id"):
+                w["enabled"] = not w.get("enabled", True)
+        cfg.set_key("watchdog_watches", watches)
+        self._refresh()
+
+    def _delete(self, watch):
+        if not messagebox.askyesno(
+            "Delete watch", f"Delete watch '{watch.get('name', '')}'?"
+        ):
+            return
+        from agent import watchdog
+
+        watchdog.delete_watch(watch.get("id"))
+        self._refresh()
+
+    def _new_watch(self):
+        WatchdogEditDialog(self, on_save=self._on_saved)
+
+    def _edit_watch(self, watch):
+        WatchdogEditDialog(self, on_save=self._on_saved, watch=watch)
+
+    def _on_saved(self, data):
+        from agent import watchdog
+        from config import settings as cfg
+
+        watches = cfg.get("watchdog_watches", [])
+        for i, w in enumerate(watches):
+            if w.get("id") == data.get("id"):
+                watches[i] = data
+                break
+        else:
+            watches.append(data)
+        cfg.set_key("watchdog_watches", watches)
+        self._refresh()
+
+    def refresh(self):
+        self._refresh()
+
+
+class WatchdogEditDialog(ctk.CTkToplevel):
+    """Create or edit a watchdog monitor."""
+
+    def __init__(self, master, on_save, watch=None):
+        super().__init__(master)
+        self.on_save = on_save
+        self.watch = watch
+        self.title("Edit watch" if watch else "New watch")
+        self.geometry("520x560")
+        self.resizable(False, False)
+        self.configure(fg_color=SURFACE)
+        self.grab_set()
+        self._build()
+
+    def _build(self):
+        w = self.watch or {}
+        ctk.CTkLabel(
+            self,
+            text=t("Edit watch") if self.watch else t("New watch"),
+            font=F_HEAD,
+            text_color=TEXT,
+        ).pack(anchor="w", padx=20, pady=(18, 2))
+        ctk.CTkLabel(
+            self,
+            text=t(
+                "Monitor a file, folder, or URL and trigger an agent when it changes."
+            ),
+            font=F_SMALL,
+            text_color=MUTED,
+        ).pack(anchor="w", padx=20, pady=(0, 12))
+
+        ctk.CTkLabel(self, text=t("Name"), font=F_BOLD, text_color=TEXT).pack(
+            anchor="w", padx=20
+        )
+        self.name_var = ctk.StringVar(value=w.get("name", ""))
+        ctk.CTkEntry(
+            self,
+            textvariable=self.name_var,
+            height=36,
+            font=F_BODY,
+            placeholder_text="e.g. Config file change",
+        ).pack(fill="x", padx=20, pady=(4, 10))
+
+        ctk.CTkLabel(self, text=t("Type"), font=F_BOLD, text_color=TEXT).pack(
+            anchor="w", padx=20
+        )
+        self.type_var = ctk.StringVar(value=w.get("type", "file"))
+        ctk.CTkComboBox(
+            self,
+            variable=self.type_var,
+            height=36,
+            font=F_BODY,
+            values=["file", "folder", "url"],
+            dropdown_fg_color=SURF2,
+        ).pack(fill="x", padx=20, pady=(4, 10))
+
+        ctk.CTkLabel(
+            self, text=t("Target (path or URL)"), font=F_BOLD, text_color=TEXT
+        ).pack(anchor="w", padx=20)
+        target_row = ctk.CTkFrame(self, fg_color="transparent")
+        target_row.pack(fill="x", padx=20, pady=(4, 10))
+        target_row.columnconfigure(0, weight=1)
+        self.target_var = ctk.StringVar(value=w.get("target", ""))
+        ctk.CTkEntry(
+            target_row, textvariable=self.target_var, height=36, font=F_BODY
+        ).grid(row=0, column=0, sticky="ew")
+        ctk.CTkButton(
+            target_row,
+            text="…",
+            width=36,
+            height=36,
+            fg_color=SURF2,
+            hover_color=BORDER,
+            text_color=TEXT,
+            font=F_BODY,
+            command=self._browse,
+        ).grid(row=0, column=1, padx=(6, 0))
+
+        ctk.CTkLabel(
+            self,
+            text=t("What should ARIA do when it changes?"),
+            font=F_BOLD,
+            text_color=TEXT,
+        ).pack(anchor="w", padx=20)
+        ctk.CTkLabel(
+            self,
+            text=t("Use {change} for a brief description of what changed."),
+            font=F_SMALL,
+            text_color=MUTED,
+        ).pack(anchor="w", padx=20)
+        self.prompt_box = ctk.CTkTextbox(
+            self,
+            height=110,
+            font=F_BODY,
+            fg_color=SURF2,
+            text_color=TEXT,
+            border_width=0,
+        )
+        self.prompt_box.pack(fill="x", padx=20, pady=(4, 12))
+        if w.get("prompt"):
+            self.prompt_box.insert("end", w["prompt"])
+
+        ctk.CTkLabel(self, text=t("Agent"), font=F_BOLD, text_color=TEXT).pack(
+            anchor="w", padx=20
+        )
+        agents = cfg.get("agents", [])
+        names = [a["name"] for a in agents] or ["Assistant"]
+        cur = names[0]
+        if w.get("agent_id"):
+            m = next((a for a in agents if a["id"] == w["agent_id"]), None)
+            if m:
+                cur = m["name"]
+        self.agent_var = ctk.StringVar(value=cur)
+        ctk.CTkComboBox(
+            self,
+            variable=self.agent_var,
+            height=36,
+            font=F_BODY,
+            values=names,
+            dropdown_fg_color=SURF2,
+        ).pack(fill="x", padx=20, pady=(4, 14))
+
+        ctk.CTkButton(
+            self,
+            text=t("Save watch") if self.watch else t("Create watch"),
+            height=42,
+            fg_color=ACCENT,
+            hover_color=tint(ACCENT, 0xCC),
+            text_color="white",
+            font=F_BOLD,
+            command=self._save,
+        ).pack(fill="x", padx=20, pady=(0, 16))
+
+    def _browse(self):
+        wtype = self.type_var.get()
+        if wtype == "folder":
+            path = filedialog.askdirectory(title="Select folder to watch")
+        else:
+            path = filedialog.askopenfilename(title="Select file to watch")
+        if path:
+            self.target_var.set(path)
+
+    def _save(self):
+        name = self.name_var.get().strip()
+        target = self.target_var.get().strip()
+        prompt = self.prompt_box.get("1.0", "end").strip()
+        if not name or not target:
+            messagebox.showwarning("Missing info", "Name and target are required.")
+            return
+        agents = cfg.get("agents", [])
+        agent = next((a for a in agents if a["name"] == self.agent_var.get()), None)
+        agent_id = agent["id"] if agent else "assistant"
+        base = dict(self.watch) if self.watch else {}
+        base.update(
+            {
+                "id": base.get("id") or f"w_{uuid.uuid4().hex[:8]}",
+                "name": name,
+                "type": self.type_var.get(),
+                "target": target,
+                "prompt": prompt
+                or "Something changed in {change} — summarise what happened.",
+                "agent_id": agent_id,
+                "enabled": base.get("enabled", True),
+                "last_seen": base.get("last_seen"),
+                "created": base.get("created") or datetime.now().isoformat(),
+            }
+        )
+        self.on_save(base)
+        self.destroy()
+
+
 class InboxTab(ctk.CTkFrame):
     """Notifications inbox: all ARIA events in one place."""
 
@@ -4588,22 +4954,28 @@ class ARIAApp(ctk.CTk):
         self.rowconfigure(0, weight=1)
 
         # ── Sidebar ────────────────────────────────────────────────────────
-        sb = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0, width=210)
+        sb = ctk.CTkFrame(
+            self,
+            fg_color=SURFACE,
+            corner_radius=0,
+            width=220,
+            border_width=0,
+        )
         sb.grid(row=0, column=0, sticky="nsew")
         sb.grid_propagate(False)
         sb.rowconfigure(10, weight=1)
 
-        # Logo
+        # Logo — brand mark with accent dot
         logo = ctk.CTkFrame(sb, fg_color="transparent")
-        logo.pack(fill="x", padx=16, pady=(20, 24))
+        logo.pack(fill="x", padx=18, pady=(22, 26))
         ctk.CTkLabel(
-            logo, text=t("ARIA"), font=("Segoe UI Black", 26), text_color=TEXT
+            logo, text="ARIA", font=("Segoe UI Black", 24), text_color=TEXT
         ).pack(side="left")
         ctk.CTkLabel(
-            logo, text=t("."), font=("Segoe UI Black", 30), text_color=ACCENT
-        ).pack(side="left")
+            logo, text=".", font=("Segoe UI Black", 28), text_color=ACCENT
+        ).pack(side="left", padx=(1, 0))
 
-        # Nav
+        # Nav — pill-style active indicator
         self._active_tab = None
         self.nav_btns = {}
         nav_items = [
@@ -4612,6 +4984,7 @@ class ARIAApp(ctk.CTk):
             ("calendar", "📅", "Calendar"),
             ("memory", "🧠", "Memory"),
             ("inbox", "🔔", "Inbox"),
+            ("watchdog", "👁", "Watchdog"),
             ("plugins", "🔌", "Plugins"),
             ("settings", "⚙", "Settings"),
         ]
@@ -4620,15 +4993,15 @@ class ARIAApp(ctk.CTk):
                 sb,
                 text=f"  {icon}  {t(label)}",
                 anchor="w",
-                height=44,
+                height=42,
                 fg_color="transparent",
                 hover_color=SURF2,
                 text_color=MUTED,
                 font=F_BODY,
-                corner_radius=10,
+                corner_radius=12,
                 command=lambda t=tab_id: self._switch(t),
             )
-            btn.pack(fill="x", padx=10, pady=2)
+            btn.pack(fill="x", padx=8, pady=1)
             self.nav_btns[tab_id] = btn
 
         # Spacer
@@ -4636,29 +5009,30 @@ class ARIAApp(ctk.CTk):
 
         # System monitor
         self.sysmon = SystemMonitor(sb)
-        self.sysmon.pack(fill="x", padx=10, pady=4)
+        self.sysmon.pack(fill="x", padx=10, pady=(0, 4))
 
-        # Status box
-        stat = ctk.CTkFrame(sb, fg_color=SURF2, corner_radius=10)
-        stat.pack(fill="x", padx=10, pady=(4, 14))
-        ctk.CTkLabel(
-            stat, text=t("STATUS"), font=("Segoe UI Semibold", 9), text_color=MUTED
-        ).pack(anchor="w", padx=12, pady=(8, 2))
+        # Status box — cleaner compact design
+        stat = ctk.CTkFrame(sb, fg_color=SURF2, corner_radius=12)
+        stat.pack(fill="x", padx=10, pady=(0, 14))
+        stat_inner = ctk.CTkFrame(stat, fg_color="transparent")
+        stat_inner.pack(fill="x", padx=12, pady=10)
+        stat_inner.columnconfigure(0, weight=1)
         self.status_lbl = ctk.CTkLabel(
-            stat, text=t("● Ready"), font=F_SMALL, text_color=SUCCESS
+            stat_inner, text=t("● Ready"), font=F_SMALL, text_color=SUCCESS, anchor="w"
         )
-        self.status_lbl.pack(anchor="w", padx=12)
+        self.status_lbl.grid(row=0, column=0, sticky="w")
         self.provider_lbl = ctk.CTkLabel(
-            stat,
-            text=f"Provider: {cfg.get('provider','claude')}",
-            font=F_SMALL,
+            stat_inner,
+            text=cfg.get("provider", "claude"),
+            font=F_TAG,
             text_color=MUTED,
+            anchor="e",
         )
-        self.provider_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+        self.provider_lbl.grid(row=0, column=1, sticky="e")
 
-        # ── Content ────────────────────────────────────────────────────────
+        # ── Content — slightly tighter padding, cleaner gap ─────────────────
         self.content = ctk.CTkFrame(self, fg_color="transparent")
-        self.content.grid(row=0, column=1, sticky="nsew", padx=16, pady=16)
+        self.content.grid(row=0, column=1, sticky="nsew", padx=(0, 14), pady=14)
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(0, weight=1)
 
@@ -4667,6 +5041,7 @@ class ARIAApp(ctk.CTk):
         self.calendar_tab = CalendarTab(self.content, self, self.scheduler)
         self.memory_tab = MemoryTab(self.content)
         self.inbox_tab = InboxTab(self.content)
+        self.watchdog_tab = WatchdogTab(self.content)
         self.plugins_tab = PluginsTab(self.content)
         self.settings_tab = SettingsTab(
             self.content, on_saved=self._on_settings_saved, app=self
@@ -4678,6 +5053,7 @@ class ARIAApp(ctk.CTk):
             "calendar": self.calendar_tab,
             "memory": self.memory_tab,
             "inbox": self.inbox_tab,
+            "watchdog": self.watchdog_tab,
             "plugins": self.plugins_tab,
             "settings": self.settings_tab,
         }
@@ -4694,10 +5070,16 @@ class ARIAApp(ctk.CTk):
                 return  # user chose Cancel; stay on Settings
         self._active_tab = tab_id
         for tid, btn in self.nav_btns.items():
-            btn.configure(
-                fg_color=SURF2 if tid == tab_id else "transparent",
-                text_color=TEXT if tid == tab_id else MUTED,
-            )
+            if tid == tab_id:
+                btn.configure(
+                    fg_color=tint(ACCENT, 0x22),
+                    text_color=ACCENT,
+                )
+            else:
+                btn.configure(
+                    fg_color="transparent",
+                    text_color=MUTED,
+                )
         for tid, tab in self._tabs.items():
             if tid == tab_id:
                 tab.grid(row=0, column=0, sticky="nsew")
@@ -4708,6 +5090,8 @@ class ARIAApp(ctk.CTk):
             self.calendar_tab.refresh()
         if tab_id == "inbox":
             self.inbox_tab.refresh()
+        if tab_id == "watchdog":
+            self.watchdog_tab.refresh()
 
     # ── Event handlers ─────────────────────────────────────────────────────
 
@@ -4747,7 +5131,7 @@ class ARIAApp(ctk.CTk):
 
     def _on_settings_saved(self):
         provider = cfg.get("provider", "claude")
-        self.provider_lbl.configure(text=f"Provider: {provider}")
+        self.provider_lbl.configure(text=provider)
         self.chat_tab.reload_agents()
         # Update clipboard watcher state
         if cfg.get("clipboard_watcher", True):
