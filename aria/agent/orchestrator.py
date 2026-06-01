@@ -75,17 +75,23 @@ def _build_tool_registry(
         tools.update(BROWSER_TOOLS)
         schemas += BROWSER_TOOL_SCHEMAS
 
-    # Advanced mode: multi-agent orchestration + planning checklist.
+    # Advanced mode: multi-agent orchestration + planning + code runner.
     if advanced:
         from agent.orchestration import (
             ORCHESTRATION_TOOLS,
             ORCHESTRATION_TOOL_SCHEMAS,
         )
         from agent.planning import PLANNING_TOOLS, PLANNING_TOOL_SCHEMAS
+        from agent.code_runner import CODE_RUNNER_TOOLS, CODE_RUNNER_TOOL_SCHEMAS
 
         tools.update(ORCHESTRATION_TOOLS)
         tools.update(PLANNING_TOOLS)
-        schemas += ORCHESTRATION_TOOL_SCHEMAS + PLANNING_TOOL_SCHEMAS
+        tools.update(CODE_RUNNER_TOOLS)
+        schemas += (
+            ORCHESTRATION_TOOL_SCHEMAS
+            + PLANNING_TOOL_SCHEMAS
+            + CODE_RUNNER_TOOL_SCHEMAS
+        )
 
     return tools, schemas
 

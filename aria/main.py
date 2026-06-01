@@ -4184,6 +4184,32 @@ class ARIAApp(ctk.CTk):
         )
         self.messaging.start()
 
+        # Code runner (advanced mode): every run requires the user's approval.
+        from agent import code_runner
+
+        code_runner.set_confirmer(self._confirm_code_run)
+
+    def _confirm_code_run(self, kind: str, content: str) -> bool:
+        """Thread-safe confirmation for the code/shell runner. Called from the
+        agent worker thread; shows the dialog on the UI thread and blocks until
+        the user answers."""
+        done = threading.Event()
+        result = {"ok": False}
+
+        def ask():
+            preview = content if len(content) <= 1500 else content[:1500] + "\n…"
+            result["ok"] = messagebox.askyesno(
+                f"Run {kind}?",
+                f"ARIA wants to run this {kind.lower()}:\n\n{preview}\n\n"
+                "Allow it to run?",
+            )
+            done.set()
+
+        on_main(self, ask)
+        # Wait (with a cap) for the user; default to deny if it never resolves.
+        done.wait(timeout=300)
+        return result["ok"]
+
     def _run_agent_for_messaging(self, prompt: str) -> str:
         """Run the agent for an inbound Telegram message. Uses the first agent's
         system prompt. Computer use is gated by the messaging toggle so PC
