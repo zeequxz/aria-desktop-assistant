@@ -52,34 +52,34 @@ except ImportError:
 # (Switching applies on restart, since widgets read these as module constants.)
 _THEMES = {
     "dark": {
-        # Modern deep-navy dark theme — richer than pure black, easier on eyes
-        "BG": "#0e0f1a",
-        "SURFACE": "#141520",
-        "SURF2": "#1b1d2e",
-        "SURF3": "#22253a",
-        "BORDER": "#2a2d45",
-        "ACCENT": "#7c9eff",  # slightly brighter, more vibrant blue
-        "SUCCESS": "#4ecb83",
-        "WARNING": "#f0c060",
-        "DANGER": "#e06060",
-        "TEXT": "#e8e9f4",
-        "MUTED": "#6b6e90",
-        "PURPLE": "#a07aff",
+        # Professional deep-navy — warmer than pure black, matches modern SaaS dark UIs
+        "BG": "#0c0e1a",
+        "SURFACE": "#13152b",
+        "SURF2": "#1a1d35",
+        "SURF3": "#21253f",
+        "BORDER": "#2c3054",
+        "ACCENT": "#5b7dff",  # vibrant indigo-blue
+        "SUCCESS": "#3fc97e",
+        "WARNING": "#f5a623",
+        "DANGER": "#e05252",
+        "TEXT": "#ecedf8",
+        "MUTED": "#6872a8",
+        "PURPLE": "#9b7aff",
     },
     "light": {
-        # Clean neutral-white light theme with good contrast
-        "BG": "#f0f1f8",
+        # Clean cool-white — neutral, strong contrast
+        "BG": "#eff1f8",
         "SURFACE": "#ffffff",
-        "SURF2": "#f5f6fc",
-        "SURF3": "#eaecf5",
-        "BORDER": "#dde0f0",
-        "ACCENT": "#4a6cf7",
-        "SUCCESS": "#279e5a",
-        "WARNING": "#c47f00",
-        "DANGER": "#c43a3a",
-        "TEXT": "#151724",
-        "MUTED": "#777a9a",
-        "PURPLE": "#7040d8",
+        "SURF2": "#f4f6fc",
+        "SURF3": "#e8ecf8",
+        "BORDER": "#d8ddf0",
+        "ACCENT": "#3d5deb",
+        "SUCCESS": "#1f9554",
+        "WARNING": "#b87800",
+        "DANGER": "#cc3333",
+        "TEXT": "#111328",
+        "MUTED": "#6870a0",
+        "PURPLE": "#6b3fd4",
     },
 }
 
@@ -1726,7 +1726,9 @@ class ProjectManagerDialog(ctk.CTkToplevel):
         super().__init__(master)
         self.on_changed = on_changed
         self.title("Manage Projects")
-        self.geometry("420x460")
+        self.geometry("440x540")
+        self.minsize(400, 480)
+        self.resizable(True, True)
         self.configure(fg_color=SURFACE)
         self.grab_set()
         self._build()
@@ -1892,7 +1894,9 @@ class AgentManagerDialog(ctk.CTkToplevel):
         super().__init__(master)
         self.on_changed = on_changed
         self.title("Manage Agents")
-        self.geometry("440x500")
+        self.geometry("460x580")
+        self.minsize(420, 520)
+        self.resizable(True, True)
         self.configure(fg_color=SURFACE)
         self.grab_set()
         self._build()
@@ -2003,8 +2007,9 @@ class AgentDialog(ctk.CTkToplevel):
         self.on_delete = on_delete
         self.agent = agent  # None when creating
         self.title("Edit Agent" if agent else "New Agent")
-        self.geometry("520x560")
-        self.resizable(False, False)
+        self.geometry("540x640")
+        self.minsize(480, 560)
+        self.resizable(True, True)
         self.configure(fg_color=SURFACE)
         self.grab_set()
         self._icon = (agent or {}).get("icon", self.ICONS[0])
@@ -2179,7 +2184,9 @@ class PromptLibraryDialog(ctk.CTkToplevel):
         super().__init__(master)
         self.on_pick = on_pick
         self.title("Prompt Library")
-        self.geometry("460x520")
+        self.geometry("480x580")
+        self.minsize(440, 520)
+        self.resizable(True, True)
         self.configure(fg_color=SURFACE)
         self.grab_set()
         self._build()
@@ -2306,7 +2313,9 @@ class SkillEditDialog(ctk.CTkToplevel):
         self.draft = draft or {}
         self.on_save = on_save
         self.title("Save Skill")
-        self.geometry("480x460")
+        self.geometry("500x560")
+        self.minsize(460, 500)
+        self.resizable(True, True)
         self.configure(fg_color=SURFACE)
         self.grab_set()
         self._build()
@@ -2383,7 +2392,9 @@ class SkillsDialog(ctk.CTkToplevel):
         super().__init__(master)
         self.on_run = on_run
         self.title("Skills")
-        self.geometry("480x520")
+        self.geometry("500x580")
+        self.minsize(460, 520)
+        self.resizable(True, True)
         self.configure(fg_color=SURFACE)
         self.grab_set()
         self._build()
@@ -2472,62 +2483,76 @@ class TaskDialog(ctk.CTkToplevel):
     def __init__(self, master, on_save, preset_date=None, task=None):
         super().__init__(master)
         self.on_save = on_save
-        # When opened from the calendar, default to a one-off task on that date.
         self.preset_date = preset_date
-        self.task = task  # existing task dict when editing, else None
+        self.task = task
         self.title("Edit Task" if task else "New Task")
-        self.geometry("520x600")
-        self.resizable(False, False)
+        self.geometry("540x680")
+        self.minsize(480, 560)
+        self.resizable(True, True)
         self.configure(fg_color=SURFACE)
         self.grab_set()
         self._build()
 
     def _build(self):
         td = self.task or {}
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        # ── Scrollable body so content never clips ─────────────────────────
+        body = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
+        body.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        body.columnconfigure(0, weight=1)
+
+        def lbl(parent, text, top=10, bottom=4):
+            ctk.CTkLabel(parent, text=text, font=F_BOLD, text_color=TEXT).pack(
+                anchor="w", padx=20, pady=(top, 0)
+            )
+
+        # Header
         ctk.CTkLabel(
-            self,
+            body,
             text="Edit Task" if self.task else "New Task",
             font=F_HEAD,
             text_color=TEXT,
-        ).pack(anchor="w", padx=20, pady=(18, 4))
+        ).pack(anchor="w", padx=20, pady=(18, 2))
         ctk.CTkLabel(
-            self,
+            body,
             text=t("Tasks can run on a schedule automatically."),
             font=F_SMALL,
             text_color=MUTED,
-        ).pack(anchor="w", padx=20, pady=(0, 14))
+        ).pack(anchor="w", padx=20, pady=(0, 12))
 
-        ctk.CTkLabel(self, text=t("Task name"), font=F_BOLD, text_color=TEXT).pack(
-            anchor="w", padx=20
-        )
+        # Name
+        lbl(body, t("Task name"), top=0)
         self.name_var = ctk.StringVar(value=td.get("name", ""))
         ctk.CTkEntry(
-            self,
+            body,
             textvariable=self.name_var,
             placeholder_text=t("e.g. Morning briefing"),
             height=38,
             font=F_BODY,
-        ).pack(fill="x", padx=20, pady=(4, 14))
+            corner_radius=10,
+        ).pack(fill="x", padx=20, pady=(4, 8))
 
-        ctk.CTkLabel(
-            self, text=t("What should ARIA do?"), font=F_BOLD, text_color=TEXT
-        ).pack(anchor="w", padx=20)
+        # Prompt
+        lbl(body, t("What should ARIA do?"))
         self.prompt_box = ctk.CTkTextbox(
-            self,
-            height=100,
+            body,
+            height=90,
             font=F_BODY,
             fg_color=SURF2,
             text_color=TEXT,
             border_width=0,
+            corner_radius=10,
         )
-        self.prompt_box.pack(fill="x", padx=20, pady=(4, 14))
+        self.prompt_box.pack(fill="x", padx=20, pady=(4, 8))
         if td.get("prompt"):
             self.prompt_box.insert("end", td["prompt"])
 
-        row = ctk.CTkFrame(self, fg_color="transparent")
-        row.pack(fill="x", padx=20, pady=(0, 12))
+        # Schedule + Agent (side by side)
+        row = ctk.CTkFrame(body, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(4, 8))
         row.columnconfigure((0, 1), weight=1)
-
         ctk.CTkLabel(row, text=t("Schedule"), font=F_BOLD, text_color=TEXT).grid(
             row=0, column=0, sticky="w"
         )
@@ -2542,6 +2567,7 @@ class TaskDialog(ctk.CTkToplevel):
             values=["none", "once", "hourly", "daily", "weekly", "monthly"],
             command=self._on_interval,
             dropdown_fg_color=SURF2,
+            corner_radius=10,
         ).grid(row=1, column=0, sticky="ew", padx=(0, 8))
 
         ctk.CTkLabel(row, text=t("Agent"), font=F_BOLD, text_color=TEXT).grid(
@@ -2562,28 +2588,26 @@ class TaskDialog(ctk.CTkToplevel):
             font=F_BODY,
             values=names,
             dropdown_fg_color=SURF2,
+            corner_radius=10,
         ).grid(row=1, column=1, sticky="ew")
 
-        # AI model picker for this task (overrides the global Settings choice).
-        ctk.CTkLabel(self, text=t("AI model"), font=F_BOLD, text_color=TEXT).pack(
-            anchor="w", padx=20, pady=(8, 0)
-        )
+        # AI model
+        lbl(body, t("AI model"))
         self.ai_var = ctk.StringVar(value=ai_label_for(td.get("ai_overrides")))
         ctk.CTkComboBox(
-            self,
+            body,
             variable=self.ai_var,
             height=36,
             font=F_BODY,
             values=[label for label, _ in ai_choices()],
             dropdown_fg_color=SURF2,
-        ).pack(fill="x", padx=20, pady=(4, 12))
+            corner_radius=10,
+        ).pack(fill="x", padx=20, pady=(4, 8))
 
-        # Date + time row. Date anchors 'once' (exact day), 'weekly' (weekday)
-        # and 'monthly' (day-of-month) tasks; time sets when they run.
-        dt_row = ctk.CTkFrame(self, fg_color="transparent")
-        dt_row.pack(fill="x", padx=20, pady=(0, 12))
+        # Date + time
+        dt_row = ctk.CTkFrame(body, fg_color="transparent")
+        dt_row.pack(fill="x", padx=20, pady=(4, 4))
         dt_row.columnconfigure((0, 1), weight=1)
-
         ctk.CTkLabel(
             dt_row, text=t("Date (YYYY-MM-DD)"), font=F_BOLD, text_color=TEXT
         ).grid(row=0, column=0, sticky="w")
@@ -2592,43 +2616,50 @@ class TaskDialog(ctk.CTkToplevel):
         )
         self.date_var = ctk.StringVar(value=default_date)
         self._date_entry = ctk.CTkEntry(
-            dt_row, textvariable=self.date_var, height=36, font=F_BODY
+            dt_row, textvariable=self.date_var, height=36, font=F_BODY, corner_radius=10
         )
         self._date_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8))
-
         ctk.CTkLabel(dt_row, text=t("Time (HH:MM)"), font=F_BOLD, text_color=TEXT).grid(
             row=0, column=1, sticky="w"
         )
         self.time_var = ctk.StringVar(value=td.get("run_at", "09:00"))
-        ctk.CTkEntry(dt_row, textvariable=self.time_var, height=36, font=F_BODY).grid(
-            row=1, column=1, sticky="ew"
-        )
+        ctk.CTkEntry(
+            dt_row, textvariable=self.time_var, height=36, font=F_BODY, corner_radius=10
+        ).grid(row=1, column=1, sticky="ew")
 
         self._hint = ctk.CTkLabel(
-            self, text="", font=F_SMALL, text_color=MUTED, anchor="w", justify="left"
+            body, text="", font=F_SMALL, text_color=MUTED, anchor="w", justify="left"
         )
-        self._hint.pack(fill="x", padx=20, pady=(0, 8))
+        self._hint.pack(fill="x", padx=20, pady=(4, 8))
+
+        # ── Sticky footer with buttons ────────────────────────────────────
+        footer = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0, height=80)
+        footer.grid(row=1, column=0, sticky="ew")
+        footer.columnconfigure((0, 1), weight=1)
+        footer.grid_propagate(False)
 
         ctk.CTkButton(
-            self,
+            footer,
+            text=t("Cancel"),
+            height=42,
+            fg_color=SURF2,
+            hover_color=SURF3,
+            text_color=MUTED,
+            font=F_BODY,
+            corner_radius=12,
+            command=self.destroy,
+        ).grid(row=0, column=0, padx=(16, 6), pady=18, sticky="ew")
+        ctk.CTkButton(
+            footer,
             text="Save Changes" if self.task else "Create Task",
             height=42,
             fg_color=ACCENT,
-            hover_color="#8aa5ff",
+            hover_color=tint(ACCENT, 0xDD),
             text_color="white",
             font=F_BOLD,
+            corner_radius=12,
             command=self._save,
-        ).pack(fill="x", padx=20, pady=(0, 6))
-        ctk.CTkButton(
-            self,
-            text=t("Cancel"),
-            height=36,
-            fg_color=SURF2,
-            hover_color=BORDER,
-            text_color=MUTED,
-            font=F_BODY,
-            command=self.destroy,
-        ).pack(fill="x", padx=20, pady=(0, 16))
+        ).grid(row=0, column=1, padx=(6, 16), pady=18, sticky="ew")
 
         self._on_interval(self.interval_var.get())
 
@@ -3457,7 +3488,9 @@ class WatchdogEditDialog(ctk.CTkToplevel):
         ).pack(anchor="w", padx=20)
         ctk.CTkLabel(
             self,
-            text=t("Placeholders: {target} = the watched path, {change} = what changed."),
+            text=t(
+                "Placeholders: {target} = the watched path, {change} = what changed."
+            ),
             font=F_SMALL,
             text_color=MUTED,
         ).pack(anchor="w", padx=20)
