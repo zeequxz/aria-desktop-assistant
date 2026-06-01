@@ -3315,25 +3315,12 @@ class WatchdogTab(ctk.CTkFrame):
             ).pack(pady=2)
 
     def _run_now(self, watch):
-        """Manually trigger a watch immediately — force a re-baseline and fire."""
+        """Manually run the watch's agent prompt right now, regardless of changes."""
         import threading
         from agent import watchdog as wd
 
-        # Reset last_seen so the next check fires unconditionally.
-        watches = cfg.get("watchdog_watches", [])
-        for w in watches:
-            if w.get("id") == watch.get("id"):
-                w["last_seen"] = None
-        cfg.set_key("watchdog_watches", watches)
-
         def go():
-            # Re-load the watch from settings (gets the cleared last_seen)
-            fresh = next(
-                (w for w in cfg.get("watchdog_watches", []) if w.get("id") == watch.get("id")),
-                watch,
-            )
-            if SERVICE := wd.SERVICE:
-                SERVICE._check_one(fresh)
+            wd._fire_watch(watch)
             on_main(self.master, self._refresh)
 
         threading.Thread(target=go, daemon=True).start()
