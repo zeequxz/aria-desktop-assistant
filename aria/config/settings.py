@@ -53,6 +53,14 @@ DEFAULTS = {
     # Advanced mode unlocks multi-agent orchestration: the active agent can
     # delegate sub-tasks to other agents and synthesise their results.
     "advanced_mode": False,
+    # Heartbeat: proactive check-in on a timer (OpenClaw-style).
+    "heartbeat_enabled": False,
+    "heartbeat_interval": 30,  # minutes
+    "heartbeat_prompt": "",  # blank = use the default
+    # Watchdog: monitors for file/folder/URL changes.
+    "watchdog_watches": [],
+    # Notifications inbox.
+    "notifications_enabled": True,
     "computer_use_enabled": False,
     "screenshot_interval": 2,
     # Text-to-speech: ARIA speaks replies aloud when enabled.

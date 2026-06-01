@@ -551,6 +551,43 @@ class ChatTab(ctk.CTkFrame):
         self.skill_bar = ctk.CTkFrame(right, fg_color=SURF2, corner_radius=8, height=34)
         self.skill_bar.grid(row=6, column=0, sticky="ew", padx=12, pady=(0, 4))
         self.skill_bar.grid_remove()
+
+        # Long-context offer banner.
+        self.ctx_bar = ctk.CTkFrame(
+            right, fg_color=tint(WARNING, 0x22), corner_radius=8, height=34
+        )
+        self.ctx_bar.grid(row=7, column=0, sticky="ew", padx=12, pady=(0, 4))
+        self.ctx_bar.grid_remove()
+        ctk.CTkLabel(
+            self.ctx_bar,
+            text=t(
+                "💬 Chat is getting long — summarise earlier turns to free context?"
+            ),
+            font=F_SMALL,
+            text_color=WARNING,
+        ).pack(side="left", padx=12, pady=4)
+        ctk.CTkButton(
+            self.ctx_bar,
+            text=t("✕"),
+            width=28,
+            height=26,
+            fg_color="transparent",
+            hover_color=tint(DANGER, 0x33),
+            text_color=MUTED,
+            font=F_SMALL,
+            command=self.ctx_bar.grid_remove,
+        ).pack(side="right", padx=(0, 6), pady=4)
+        ctk.CTkButton(
+            self.ctx_bar,
+            text=t("Summarise"),
+            width=90,
+            height=26,
+            fg_color=tint(WARNING, 0x44),
+            hover_color=tint(WARNING, 0x66),
+            text_color=WARNING,
+            font=F_SMALL,
+            command=self._summarise_context,
+        ).pack(side="right", padx=6, pady=4)
         ctk.CTkLabel(
             self.skill_bar,
             text=t("💡 Save these steps as a reusable skill?"),
@@ -922,6 +959,7 @@ class ChatTab(ctk.CTkFrame):
             self._persist_current_chat()
         self.history_msgs = []
         self.current_chat_file = None
+        self._context_offered = False
         self.msg_box.configure(state="normal")
         self.msg_box.delete("1.0", "end")
         self.msg_box.configure(state="disabled")
@@ -1163,6 +1201,39 @@ class ChatTab(ctk.CTkFrame):
         self.input_box.insert("end", skill.get("prompt", ""))
         self.input_box.focus_set()
 
+    def _summarise_context(self):
+        """Summarise earlier turns to free context window (async)."""
+        self.ctx_bar.grid_remove()
+        self._context_offered = False
+        msgs = list(self.history_msgs)
+        system = self.active_agent["system"] if self.active_agent else ""
+        self.tool_bar.grid()
+        self.tool_lbl.configure(text=t("💬 Summarising conversation…"))
+
+        def work():
+            from agent.context_manager import summarise
+
+            new_msgs, summary = summarise(msgs, system)
+            on_main(
+                self.root, lambda n=new_msgs, s=summary: self._on_context_done(n, s)
+            )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_context_done(self, new_msgs, summary):
+        self.tool_bar.grid_remove()
+        self.history_msgs = new_msgs
+        # Redraw the chat with the summarised history.
+        self.msg_box.configure(state="normal")
+        self.msg_box.delete("1.0", "end")
+        self.msg_box.configure(state="disabled")
+        for m in self.history_msgs:
+            txt = m.get("content", "")
+            if not isinstance(txt, str):
+                txt = str(txt)
+            self._append_msg(m.get("role", "user"), txt)
+        self._append_msg("tool", f"[Context compressed — {len(new_msgs)} turns kept]")
+
     def _save_current_as_skill(self):
         """Distil the current conversation into a reusable skill (async)."""
         self.skill_bar.grid_remove()
@@ -1292,6 +1363,14 @@ class ChatTab(ctk.CTkFrame):
         # Offer to save a reusable skill after a successful multi-step turn.
         if self._turn_used_tools and len(self.history_msgs) >= 2:
             self.skill_bar.grid()
+        # Show long-context offer when chat is getting long.
+        from agent.context_manager import needs_summarisation
+
+        if needs_summarisation(self.history_msgs) and not getattr(
+            self, "_context_offered", False
+        ):
+            self._context_offered = True
+            self.ctx_bar.grid()
         self.on_notify("ARIA", "Response ready")
 
     def _on_error(self, err):
@@ -3071,6 +3150,156 @@ class MemoryTab(ctk.CTkFrame):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+class InboxTab(ctk.CTkFrame):
+    """Notifications inbox: all ARIA events in one place."""
+
+    def __init__(self, master, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self._build()
+        self._refresh()
+
+    def _build(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        top = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=14, height=58)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        top.grid_propagate(False)
+        ctk.CTkLabel(top, text=t("Inbox"), font=F_TITLE, text_color=TEXT).pack(
+            side="left", padx=18
+        )
+        self.unread_lbl = ctk.CTkLabel(top, text="", font=F_SMALL, text_color=ACCENT)
+        self.unread_lbl.pack(side="left")
+        ctk.CTkButton(
+            top,
+            text=t("Mark all read"),
+            width=120,
+            height=34,
+            fg_color=SURF2,
+            hover_color=BORDER,
+            text_color=MUTED,
+            font=F_SMALL,
+            command=self._mark_all_read,
+        ).pack(side="right", padx=4)
+        ctk.CTkButton(
+            top,
+            text=t("Clear all"),
+            width=90,
+            height=34,
+            fg_color=tint(DANGER, 0x22),
+            hover_color=tint(DANGER, 0x44),
+            text_color=DANGER,
+            border_color=tint(DANGER, 0x88),
+            border_width=1,
+            font=F_SMALL,
+            command=self._clear_all,
+        ).pack(side="right", padx=14)
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color=SURFACE, corner_radius=14)
+        self.scroll.grid(row=1, column=0, sticky="nsew")
+
+    def _refresh(self):
+        from agent import notifications
+
+        for w in self.scroll.winfo_children():
+            w.destroy()
+
+        items = notifications.list_notifications(limit=100)
+        items = list(reversed(items))  # newest first
+
+        unread = sum(1 for n in items if not n.get("read"))
+        self.unread_lbl.configure(text=f"  {unread} unread" if unread else "")
+
+        if not items:
+            ctk.CTkLabel(
+                self.scroll,
+                text=t("No notifications yet."),
+                font=F_BODY,
+                text_color=MUTED,
+            ).pack(pady=40)
+            return
+
+        _ICONS = {
+            "task": "⚡",
+            "watchdog": "🔔",
+            "heartbeat": "💓",
+            "skill": "🧩",
+            "info": "ℹ",
+        }
+        for n in items:
+            is_read = n.get("read", False)
+            card = ctk.CTkFrame(
+                self.scroll,
+                fg_color=SURF2 if is_read else tint(ACCENT, 0x22),
+                corner_radius=10,
+            )
+            card.pack(fill="x", padx=8, pady=3)
+            card.columnconfigure(1, weight=1)
+
+            icon = _ICONS.get(n.get("type", "info"), "ℹ")
+            ctk.CTkLabel(
+                card,
+                text=icon,
+                font=("Segoe UI", 20),
+                width=36,
+                text_color=MUTED if is_read else ACCENT,
+            ).grid(row=0, column=0, rowspan=2, padx=(10, 0), pady=8)
+            ctk.CTkLabel(
+                card,
+                text=n.get("title", ""),
+                font=F_BOLD,
+                text_color=TEXT if not is_read else MUTED,
+                anchor="w",
+            ).grid(row=0, column=1, sticky="w", padx=8, pady=(8, 0))
+            ts = n.get("ts", "")[:16].replace("T", " ")
+            ctk.CTkLabel(
+                card, text=ts, font=("Segoe UI", 9), text_color=MUTED, anchor="e"
+            ).grid(row=0, column=2, padx=(0, 10), pady=(8, 0))
+            body = n.get("body", "")[:200]
+            ctk.CTkLabel(
+                card,
+                text=body,
+                font=F_SMALL,
+                text_color=MUTED,
+                anchor="w",
+                wraplength=550,
+                justify="left",
+            ).grid(row=1, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 8))
+            if not is_read:
+                ctk.CTkButton(
+                    card,
+                    text=t("✓"),
+                    width=26,
+                    height=24,
+                    fg_color="transparent",
+                    hover_color=SURF3,
+                    text_color=MUTED,
+                    font=F_SMALL,
+                    command=lambda nid=n["id"]: self._mark_read(nid),
+                ).grid(row=0, column=3, padx=(0, 6))
+
+    def _mark_read(self, notif_id):
+        from agent import notifications
+
+        notifications.mark_read(notif_id)
+        self._refresh()
+
+    def _mark_all_read(self):
+        from agent import notifications
+
+        notifications.mark_read(None)
+        self._refresh()
+
+    def _clear_all(self):
+        from agent import notifications
+
+        notifications.clear_all()
+        self._refresh()
+
+    def refresh(self):
+        self._refresh()
+
+
 class PluginsTab(ctk.CTkScrollableFrame):
     def __init__(self, master, **kw):
         super().__init__(master, fg_color="transparent", **kw)
@@ -3560,6 +3789,39 @@ class SettingsTab(ctk.CTkScrollableFrame):
             text_color=TEXT,
         ).pack(anchor="w", pady=(0, 8))
 
+        # Heartbeat
+        section("Heartbeat")
+        ctk.CTkLabel(
+            self,
+            text=t("ARIA proactively checks in on a timer and acts on pending items."),
+            font=F_SMALL,
+            text_color=MUTED,
+            justify="left",
+            wraplength=560,
+        ).pack(anchor="w", pady=(0, 6))
+        self.heartbeat_enabled_var = ctk.BooleanVar(
+            value=s.get("heartbeat_enabled", False)
+        )
+        ctk.CTkCheckBox(
+            self,
+            text=t("Enable heartbeat"),
+            variable=self.heartbeat_enabled_var,
+            font=F_BODY,
+            text_color=TEXT,
+        ).pack(anchor="w", pady=(0, 4))
+        lbl("Heartbeat interval (minutes)")
+        self.heartbeat_interval_var = ctk.StringVar(
+            value=str(s.get("heartbeat_interval", 30))
+        )
+        ctk.CTkComboBox(
+            self,
+            variable=self.heartbeat_interval_var,
+            height=36,
+            font=F_BODY,
+            values=["5", "10", "15", "30", "60", "120"],
+            dropdown_fg_color=SURF2,
+        ).pack(fill="x", pady=(4, 12))
+
         section("Behaviour")
         checks = [
             (
@@ -3817,6 +4079,8 @@ class SettingsTab(ctk.CTkScrollableFrame):
             "tts_voice": self.tts_voice_var.get(),
             "tts_rate": self.tts_rate_var.get(),
             "advanced_mode": self.advanced_mode_var.get(),
+            "heartbeat_enabled": self.heartbeat_enabled_var.get(),
+            "heartbeat_interval": self.heartbeat_interval_var.get(),
         }
         for k, v in self._check_vars.items():
             d[k] = v.get()
@@ -3842,6 +4106,8 @@ class SettingsTab(ctk.CTkScrollableFrame):
             self.tts_voice_var,
             self.tts_rate_var,
             self.advanced_mode_var,
+            self.heartbeat_enabled_var,
+            self.heartbeat_interval_var,
             self.telegram_token,
             self.telegram_allow,
             self.discord_webhook,
@@ -3907,6 +4173,11 @@ class SettingsTab(ctk.CTkScrollableFrame):
         # Voice (text-to-speech)
         s["tts_enabled"] = self.tts_enabled_var.get()
         s["advanced_mode"] = self.advanced_mode_var.get()
+        s["heartbeat_enabled"] = self.heartbeat_enabled_var.get()
+        try:
+            s["heartbeat_interval"] = int(self.heartbeat_interval_var.get())
+        except ValueError:
+            s["heartbeat_interval"] = 30
         s["tts_voice"] = self._tts_voice_map.get(self.tts_voice_var.get(), "")
         try:
             s["tts_rate"] = int(self.tts_rate_var.get())
@@ -4252,6 +4523,17 @@ class ARIAApp(ctk.CTk):
 
         code_runner.set_confirmer(self._confirm_code_run)
 
+        # Watchdog: file/folder/URL trigger-on-change service.
+        from agent import watchdog
+
+        watchdog.start_service()
+
+        # Heartbeat: proactive timer-based check-in.
+        from agent import heartbeat
+
+        heartbeat.start_service()
+        self._heartbeat_svc = heartbeat.SERVICE
+
     def _confirm_code_run(self, kind: str, content: str) -> bool:
         """Thread-safe confirmation for the code/shell runner. Called from the
         agent worker thread; shows the dialog on the UI thread and blocks until
@@ -4329,6 +4611,7 @@ class ARIAApp(ctk.CTk):
             ("tasks", "⚡", "Tasks"),
             ("calendar", "📅", "Calendar"),
             ("memory", "🧠", "Memory"),
+            ("inbox", "🔔", "Inbox"),
             ("plugins", "🔌", "Plugins"),
             ("settings", "⚙", "Settings"),
         ]
@@ -4383,6 +4666,7 @@ class ARIAApp(ctk.CTk):
         self.tasks_tab = TasksTab(self.content, self, self.scheduler)
         self.calendar_tab = CalendarTab(self.content, self, self.scheduler)
         self.memory_tab = MemoryTab(self.content)
+        self.inbox_tab = InboxTab(self.content)
         self.plugins_tab = PluginsTab(self.content)
         self.settings_tab = SettingsTab(
             self.content, on_saved=self._on_settings_saved, app=self
@@ -4393,6 +4677,7 @@ class ARIAApp(ctk.CTk):
             "tasks": self.tasks_tab,
             "calendar": self.calendar_tab,
             "memory": self.memory_tab,
+            "inbox": self.inbox_tab,
             "plugins": self.plugins_tab,
             "settings": self.settings_tab,
         }
@@ -4421,6 +4706,8 @@ class ARIAApp(ctk.CTk):
         # Calendar reflects tasks created in other tabs, so refresh on entry.
         if tab_id == "calendar":
             self.calendar_tab.refresh()
+        if tab_id == "inbox":
+            self.inbox_tab.refresh()
 
     # ── Event handlers ─────────────────────────────────────────────────────
 
@@ -4433,6 +4720,18 @@ class ARIAApp(ctk.CTk):
         self.tray.update_status("Ready")
         self.tasks_tab.on_task_done(task_id, name, result)
         self._notify("Task complete", f"{name} finished.")
+        # Persist to inbox so nothing is lost.
+        try:
+            from agent import notifications
+
+            notifications.push(
+                title=f"⚡ {name}",
+                body=result[:300] if result else "Completed.",
+                ntype="task",
+                source=task_id,
+            )
+        except Exception:
+            pass
 
     def _notify(self, title: str, message: str):
         """Send a desktop notification (only if window is not focused)."""
@@ -4458,6 +4757,9 @@ class ARIAApp(ctk.CTk):
         # Apply any messaging changes (token / enabled toggled in Settings).
         if hasattr(self, "messaging"):
             self.messaging.restart()
+        # Restart heartbeat if its settings changed.
+        if hasattr(self, "_heartbeat_svc") and self._heartbeat_svc:
+            self._heartbeat_svc.restart()
 
     def _show_window(self):
         self.deiconify()

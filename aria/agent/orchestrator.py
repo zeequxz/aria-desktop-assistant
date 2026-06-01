@@ -83,14 +83,17 @@ def _build_tool_registry(
         )
         from agent.planning import PLANNING_TOOLS, PLANNING_TOOL_SCHEMAS
         from agent.code_runner import CODE_RUNNER_TOOLS, CODE_RUNNER_TOOL_SCHEMAS
+        from agent.batch import BATCH_TOOLS, BATCH_TOOL_SCHEMAS
 
         tools.update(ORCHESTRATION_TOOLS)
         tools.update(PLANNING_TOOLS)
         tools.update(CODE_RUNNER_TOOLS)
+        tools.update(BATCH_TOOLS)
         schemas += (
             ORCHESTRATION_TOOL_SCHEMAS
             + PLANNING_TOOL_SCHEMAS
             + CODE_RUNNER_TOOL_SCHEMAS
+            + BATCH_TOOL_SCHEMAS
         )
 
     return tools, schemas
