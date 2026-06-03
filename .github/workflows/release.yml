@@ -1,0 +1,67 @@
+name: Release ARIA v2
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: aria-v2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          pip install -r requirements.txt
+
+      - name: Smoke tests (engine + harness, no API key)
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m aria2 --smoke
+          python -m aria2.evals.run_evals --stub
+
+      - name: Build executable
+        run: python -m PyInstaller --noconfirm aria2.spec
+
+      - name: Package + update manifest
+        shell: pwsh
+        env:
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          $ver = python -c "import aria2; print(aria2.__version__)"
+          $zip = "ARIA2-$ver.zip"
+          Compress-Archive -Path dist/ARIA2/* -DestinationPath $zip -Force
+          $url = "https://github.com/$env:REPO/releases/download/$env:TAG/$zip"
+          python scripts/make_manifest.py --version $ver --url $url `
+            --notes "ARIA v2 $ver" --out latest.json
+          Get-Content latest.json
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARIA2-windows
+          path: |
+            aria-v2/ARIA2-*.zip
+            aria-v2/latest.json
+
+      - name: Attach assets to the release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            aria-v2/ARIA2-*.zip
+            aria-v2/latest.json

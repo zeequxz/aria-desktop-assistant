@@ -1,0 +1,24 @@
+# Core UI
+customtkinter>=5.2.2
+
+# AI providers (all optional at runtime — the app degrades gracefully if absent)
+anthropic>=0.40.0
+openai>=1.40.0
+requests>=2.31.0
+
+# Computer-use (mouse/keyboard/screen control). Optional — computer tools return
+# a clear error if it's missing.
+pyautogui>=0.9.54
+
+# v1 extras — all optional; features degrade gracefully if absent.
+pyttsx3>=2.90          # text-to-speech (speak replies)
+pystray>=0.19          # system tray icon
+Pillow>=10.0           # tray icon image + paste-image-from-clipboard
+windnd>=1.0.7 ; sys_platform == "win32"  # drag-and-drop files onto the window
+# SpeechRecognition>=3.10  # optional voice input (also needs PyAudio + a mic)
+
+# Windows secret storage (DPAPI). Optional elsewhere; falls back to base64.
+pywin32>=306 ; sys_platform == "win32"
+
+# Build only (packaging) — not needed to run from source. See build.bat / aria2.spec.
+# pyinstaller>=6.0
