@@ -14,8 +14,14 @@ channel that a code-signing + delta step can later build on.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
 
 from aria2 import __version__
@@ -121,3 +127,91 @@ def download_update(asset_url: str) -> dict:
         return {"ok": True, "path": str(dest)}
     except Exception as e:
         return {"error": str(e)}
+
+
+# ── In-place self-update (packaged .exe only) ────────────────────────────────
+
+def is_frozen() -> bool:
+    """True when running as the packaged PyInstaller build (there's an .exe to
+    replace in place); False when running from source."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def install_root() -> Path | None:
+    """Folder to replace during an in-place update (where ARIA2.exe lives)."""
+    if not is_frozen():
+        return None
+    return Path(sys.executable).resolve().parent
+
+
+def download_and_install(asset_url: str, on_status=None) -> dict:
+    """Download the update zip, stage it, and hand off to a detached helper that
+    waits for ARIA to exit, copies the new build over the install folder, and
+    relaunches. On {"ok": True, "relaunch": True} the CALLER must quit the app so
+    the locked files can be replaced.
+
+    Packaged build only — from source it returns an error (update with git)."""
+    def status(msg: str) -> None:
+        if on_status:
+            try:
+                on_status(msg)
+            except Exception:
+                pass
+
+    if not asset_url or not _scheme_ok(asset_url):
+        return {"error": "Invalid or non-http(s) download URL."}
+    if not is_frozen():
+        return {"error": "In-place update only works in the packaged app — "
+                         "you're running from source. Update with git instead."}
+    dest = install_root()
+    if dest is None or not dest.exists():
+        return {"error": "Could not locate the install folder to update."}
+    try:
+        work = Path(tempfile.mkdtemp(prefix="aria2_update_"))
+        zip_path = work / "update.zip"
+        status("Downloading update…")
+        req = urllib.request.Request(
+            asset_url, headers={"User-Agent": f"ARIA2/{__version__}"})
+        with urllib.request.urlopen(req, timeout=180) as resp, open(zip_path, "wb") as f:
+            shutil.copyfileobj(resp, f)
+        status("Extracting…")
+        staging = work / "new"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(staging)
+        # Locate the folder containing ARIA2.exe (the zip may be flat or nested).
+        src = staging
+        if not (src / "ARIA2.exe").exists():
+            found = next((p.parent for p in staging.rglob("ARIA2.exe")), None)
+            if not found:
+                return {"error": "Update package did not contain ARIA2.exe."}
+            src = found
+        status("Installing — ARIA will restart…")
+        bat = _write_updater_bat(work, os.getpid(), src, dest)
+        # Detached + own process group so it outlives this process and can
+        # replace the (now-unlocked, after we exit) install files.
+        subprocess.Popen(["cmd", "/c", str(bat)],
+                         creationflags=0x00000008 | 0x00000200)  # DETACHED | NEW_GROUP
+        return {"ok": True, "relaunch": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _write_updater_bat(work: Path, pid: int, src: Path, dest: Path) -> Path:
+    """Write the helper batch script: wait for ARIA (pid) to exit, mirror the new
+    build (src) over the install folder (dest), then relaunch ARIA2.exe."""
+    bat = work / "aria2_update.bat"
+    script = (
+        "@echo off\r\n"
+        "chcp 65001 >NUL\r\n"
+        ":waitloop\r\n"
+        f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL\r\n'
+        "if not errorlevel 1 (\r\n"
+        "  ping -n 2 127.0.0.1 >NUL\r\n"
+        "  goto waitloop\r\n"
+        ")\r\n"
+        "ping -n 3 127.0.0.1 >NUL\r\n"
+        f'robocopy "{src}" "{dest}" /E /IS /IT /R:3 /W:1 /NFL /NDL /NJH /NJS >NUL\r\n'
+        f'start "" "{dest}\\ARIA2.exe"\r\n'
+    )
+    bat.write_text(script, encoding="utf-8")
+    return bat

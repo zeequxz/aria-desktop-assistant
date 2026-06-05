@@ -372,8 +372,24 @@ class ARIAApp(ctk.CTk):
         self._update_banner.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
 
     def _open_update(self):
-        if self._update_info:
-            self.show("settings")  # Settings → Updates has notes + download
+        if not self._update_info:
+            return
+        self.show("settings")  # Settings → Updates has the version + install button
+        sv = self._views.get("settings")
+        if sv is not None and hasattr(sv, "_show_update"):
+            import aria2
+            # Pre-populate the panel with what the banner found, so the user can
+            # hit "Update & restart" straight away (no second "Check now").
+            try:
+                sv._show_update({
+                    "status": "update",
+                    "current": self._update_info.get("current", aria2.__version__),
+                    "version": self._update_info.get("version", ""),
+                    "url": self._update_info.get("url", ""),
+                    "notes": self._update_info.get("notes", ""),
+                })
+            except Exception:
+                pass
 
     # ── View switching ─────────────────────────────────────────────────────────
 

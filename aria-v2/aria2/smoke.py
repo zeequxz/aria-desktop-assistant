@@ -331,6 +331,20 @@ def run_smoke() -> int:
           and update_service._manifest_url("http://x/m.json") == "http://x/m.json")
     config.set_key("update_manifest_url",
                    config.DEFAULTS.get("update_manifest_url", ""))
+    # In-place self-update: guarded to the packaged build; the updater script
+    # waits for the pid, copies the new build over the install dir, relaunches.
+    check("download_and_install refuses when running from source (not frozen)",
+          not update_service.is_frozen()
+          and "error" in update_service.download_and_install("https://x/ARIA2.zip"))
+    import tempfile as _tfu
+    from pathlib import Path as _PPu
+    _ubat = update_service._write_updater_bat(
+        _PPu(_tfu.mkdtemp(prefix="aria2_upd_")), 4242,
+        _PPu("C:/src/app"), _PPu("C:/dest/app"))
+    _ubt = _ubat.read_text(encoding="utf-8")
+    check("updater script waits for the pid, copies the build, and relaunches",
+          "4242" in _ubt and "robocopy" in _ubt.lower()
+          and "ARIA2.exe" in _ubt and "waitloop" in _ubt)
 
     # ── Computer-use tools + access levels ────────────────────────────────────
     from aria2.runtime.tools.registry import build_toolset

@@ -569,6 +569,10 @@ class SettingsView(ctk.CTkFrame):
                 text=f"Update available: v{st['version']}  (you have v{cur})"
                      + (f" — {st.get('notes','')[:40]}" if st.get('notes') else ""),
                 text_color=theme.WARN)
+            from aria2.services import update_service as _us
+            self.dl_btn.configure(
+                text="⬇  Update & restart" if _us.is_frozen() else "⬇  Download zip",
+                state="normal")
             self.dl_btn.pack(side="left", padx=6)
         elif status == "error":
             self.update_status.configure(
@@ -585,16 +589,48 @@ class SettingsView(ctk.CTkFrame):
         from aria2.services import update_service
         if not self._pending_update:
             return
+        url = self._pending_update.get("url", "")
+
+        if update_service.is_frozen():
+            # Packaged build: download + install in place, then restart.
+            self.dl_btn.configure(state="disabled")
+            self.update_status.configure(text="Starting update…", text_color=theme.TEXT_DIM)
+
+            def worker():
+                res = update_service.download_and_install(
+                    url, on_status=lambda m: self.after(
+                        0, lambda: self.update_status.configure(
+                            text=m, text_color=theme.TEXT_DIM)))
+                if res.get("ok") and res.get("relaunch"):
+                    self.after(0, self._restart_for_update)
+                else:
+                    self.after(0, lambda: (
+                        self.update_status.configure(
+                            text=f"✗ {res.get('error', 'update failed')[:70]}",
+                            text_color=theme.DANGER),
+                        self.dl_btn.configure(state="normal")))
+
+            threading.Thread(target=worker, daemon=True).start()
+            return
+
+        # Running from source: just download the zip (manual install).
         self.update_status.configure(text="Downloading…", text_color=theme.TEXT_DIM)
 
         def worker():
-            res = update_service.download_update(self._pending_update.get("url", ""))
+            res = update_service.download_update(url)
             msg = (f"Downloaded → {res['path']}" if res.get("ok")
                    else f"✗ {res.get('error', 'failed')[:50]}")
             self.after(0, lambda: self.update_status.configure(
                 text=msg, text_color=theme.SUCCESS if res.get("ok") else theme.DANGER))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _restart_for_update(self):
+        """Quit so the detached updater can replace the files and relaunch."""
+        self.update_status.configure(text="Update staged — restarting ARIA…",
+                                     text_color=theme.SUCCESS)
+        if hasattr(self, "app"):
+            self.after(1200, self.app._real_quit)
 
     def _section(self, title: str, prov=None) -> ctk.CTkFrame:
         parent = prov if prov is not None else self
