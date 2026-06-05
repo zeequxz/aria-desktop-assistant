@@ -466,8 +466,9 @@ class ARIAApp(ctk.CTk):
 
         self.after(0, _ask)
 
-        # After 10 minutes with no response, send a Telegram nudge so the
-        # user knows approval is waiting (e.g. they stepped away from the PC).
+        # If still unanswered after 2 minutes, send a Telegram nudge so the user
+        # knows approval is waiting (e.g. they stepped away from the PC). This
+        # must fire BEFORE the 5-minute auto-deny below, or it would be a no-op.
         def _nudge():
             if not done.is_set():
                 try:
@@ -478,7 +479,7 @@ class ARIAApp(ctk.CTk):
                 except Exception:
                     pass
         import threading as _th
-        nudge_t = _th.Timer(600, _nudge)
+        nudge_t = _th.Timer(120, _nudge)
         nudge_t.daemon = True
         nudge_t.start()
 

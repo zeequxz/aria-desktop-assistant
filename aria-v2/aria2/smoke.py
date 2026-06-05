@@ -561,6 +561,17 @@ def run_smoke() -> int:
           _pyres.get("exit_code") == 0
           and 'quotes " and back\\slash' in _pyres.get("stdout", ""))
 
+    # Bus unsubscribe (the mechanism ChatView.destroy() uses so destroyed views
+    # stop receiving run.* events — fixes the rebuild_views handler leak).
+    from aria2.core.events import EventBus as _EB
+    _eb = _EB()
+    _hits = []
+    _unsub = _eb.subscribe("x.y", lambda p: _hits.append(1))
+    _eb.publish("x.y", {})
+    _unsub()
+    _eb.publish("x.y", {})
+    check("bus unsubscribe stops further delivery", len(_hits) == 1)
+
     from aria2.runtime.tools import permissions as _perm
     _perm.set_approver(None)  # headless: no approver
     allowed_deny, _ = _perm.check("run_shell", {}, {"run_shell": "deny"}, "ask")

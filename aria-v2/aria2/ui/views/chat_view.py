@@ -694,6 +694,18 @@ class ChatView(ctk.CTkFrame):
         self._unsubs.append(self.app.on_event("run.error",      self._on_error))
         self._unsubs.append(self.app.on_event("run.clear_text", self._on_clear_text))
 
+    def destroy(self):
+        # Release bus subscriptions so a destroyed view (e.g. after a font-size
+        # rebuild_views) stops receiving run.* events and firing handlers against
+        # dead widgets. Without this, each rebuild leaked 5 dangling handlers.
+        for unsub in self._unsubs:
+            try:
+                unsub()
+            except Exception:
+                pass
+        self._unsubs = []
+        super().destroy()
+
     def _on_token(self, payload):
         if payload.get("run_id") != self.active_run or not self._stream_bubble:
             return
@@ -856,6 +868,8 @@ class ChatView(ctk.CTkFrame):
             ("local",   f"Local · {s.get('ollama_model','llama3')[:12]}"),
             ("grok",    f"Grok · {s.get('grok_model','grok-2')[:10]}"),
             ("gemini",  f"Gemini · {s.get('gemini_model','flash')[:10]}"),
+            ("openai_compat",
+             f"OpenAI-compat · {s.get('oai_compat_model','') [:12] or 'server'}"),
         ]
         for pid, label in _map:
             labels.append(label)
