@@ -15,7 +15,7 @@ from __future__ import annotations
 import threading
 import time
 
-from aria2.core import config
+from aria2.core import config, procutil
 from aria2.core.events import bus
 
 _MIN_FREE_VRAM_MB = 512   # if less than this is free, unload the LRU model
@@ -112,7 +112,7 @@ class OllamaModelManager:
             r = subprocess.run(
                 ["nvidia-smi", "--query-gpu=memory.total,memory.free",
                  "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, timeout=5, **procutil.NO_WINDOW)
             if r.returncode == 0:
                 parts = r.stdout.strip().split(", ")
                 total, free = int(parts[0]), int(parts[1])

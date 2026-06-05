@@ -20,7 +20,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from aria2.core import config
+from aria2.core import config, procutil
 from aria2.ui import theme
 from aria2.ui.views import widgets as w
 
@@ -89,7 +89,7 @@ def _detect_ram_gb() -> float:
         # Windows fallback via wmic
         out = subprocess.check_output(
             ["wmic", "computersystem", "get", "TotalPhysicalMemory"],
-            timeout=5, text=True)
+            timeout=5, text=True, **procutil.NO_WINDOW)
         for line in out.splitlines():
             line = line.strip()
             if line.isdigit():
@@ -101,7 +101,8 @@ def _detect_ram_gb() -> float:
 
 def _ollama_installed() -> bool:
     try:
-        r = subprocess.run(["ollama", "list"], capture_output=True, timeout=5)
+        r = subprocess.run(["ollama", "list"], capture_output=True, timeout=5,
+                           **procutil.NO_WINDOW)
         return r.returncode == 0
     except Exception:
         return False
@@ -113,7 +114,8 @@ def _detect_gpu() -> tuple[bool, str]:
     try:
         r = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
                             "--format=csv,noheader"],
-                           capture_output=True, text=True, timeout=6)
+                           capture_output=True, text=True, timeout=6,
+                           **procutil.NO_WINDOW)
         if r.returncode == 0 and r.stdout.strip():
             line = r.stdout.strip().splitlines()[0]
             return True, f"NVIDIA {line}"
@@ -123,7 +125,7 @@ def _detect_gpu() -> tuple[bool, str]:
     try:
         r = subprocess.run(
             ["wmic", "path", "win32_videocontroller", "get", "caption,adapterram"],
-            capture_output=True, text=True, timeout=6)
+            capture_output=True, text=True, timeout=6, **procutil.NO_WINDOW)
         for line in r.stdout.splitlines():
             line = line.strip()
             if line and "caption" not in line.lower() and len(line) > 4:
@@ -529,7 +531,8 @@ class LocalAIWizard(ctk.CTkToplevel):
         def worker():
             try:
                 import subprocess as sp, json
-                r = sp.run(["ollama", "list"], capture_output=True, text=True, timeout=8)
+                r = sp.run(["ollama", "list"], capture_output=True, text=True,
+                           timeout=8, **procutil.NO_WINDOW)
                 if mid.split(":")[0] in r.stdout:
                     self.after(0, lambda: self._pull_status.configure(
                         text=f"✓ {mid} is downloaded and ready!", text_color=theme.SUCCESS))

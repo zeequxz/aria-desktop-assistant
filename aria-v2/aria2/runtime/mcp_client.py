@@ -18,6 +18,8 @@ import queue
 import subprocess
 import threading
 
+from aria2.core import procutil
+
 PROTOCOL_VERSION = "2024-11-05"
 
 
@@ -76,7 +78,7 @@ class MCPClient(_MCPMethods):
             self._proc = subprocess.Popen(
                 [self._command, *self._args],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1, env=env,
+                text=True, bufsize=1, env=env, **procutil.NO_WINDOW,
             )
         except FileNotFoundError as e:
             raise MCPError(f"Cannot launch MCP server '{self._command}': {e}")

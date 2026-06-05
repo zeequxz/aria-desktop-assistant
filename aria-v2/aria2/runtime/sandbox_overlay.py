@@ -20,6 +20,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from aria2.core import procutil
+
 MAX_READ = 100_000
 
 
@@ -119,14 +121,16 @@ class OverlaySandbox:
         msg = message or f"aria: apply dry-run changes ({len(files)} file(s))"
         try:
             subprocess.run(["git", "add", *files], cwd=str(self.base),
-                           capture_output=True, text=True, timeout=30, check=True)
+                           capture_output=True, text=True, timeout=30, check=True,
+                           **procutil.NO_WINDOW)
             r = subprocess.run(["git", "commit", "-m", msg], cwd=str(self.base),
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True, timeout=30,
+                               **procutil.NO_WINDOW)
             if r.returncode != 0:
                 return {"error": (r.stderr or r.stdout).strip()[:300]}
             sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                                  cwd=str(self.base), capture_output=True, text=True,
-                                 timeout=10).stdout.strip()
+                                 timeout=10, **procutil.NO_WINDOW).stdout.strip()
             return {"committed_sha": sha, "message": msg, "files": files}
         except Exception as e:
             return {"error": str(e)}

@@ -18,6 +18,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from aria2.core import procutil
+
 MAX_OUTPUT = 20_000
 
 # Background (detached) processes launched via run_shell(background=True).
@@ -38,6 +40,7 @@ def _exec(cmd, cwd: str | None, timeout: int, shell: bool) -> dict:
             capture_output=True,
             text=True,
             timeout=timeout,
+            **procutil.NO_WINDOW,
         )
         out = (proc.stdout or "")[:MAX_OUTPUT]
         err = (proc.stderr or "")[:MAX_OUTPUT]
@@ -102,7 +105,7 @@ def terminate_background() -> int:
             if proc.poll() is None:
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                                   capture_output=True, timeout=10)
+                                   capture_output=True, timeout=10, **procutil.NO_WINDOW)
                 else:
                     proc.terminate()
                 n += 1

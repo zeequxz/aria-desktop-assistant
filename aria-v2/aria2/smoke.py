@@ -701,6 +701,12 @@ def run_smoke() -> int:
     _shtools = {t.name: t for t in make_shell_tools(".")}
     check("run_shell tool exposes a background option",
           "background" in _shtools["run_shell"].input_schema.get("properties", {}))
+    # Subprocesses must not flash a console window in the windowed app.
+    import os as _osnw
+    from aria2.core import procutil as _pu
+    check("procutil sets CREATE_NO_WINDOW on Windows (no console flash)",
+          (_pu.NO_WINDOW.get("creationflags") == 0x08000000) if _osnw.name == "nt"
+          else _pu.NO_WINDOW == {})
 
     from aria2.runtime.tools import permissions as _perm
     _perm.set_approver(None)  # headless: no approver
