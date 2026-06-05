@@ -72,4 +72,6 @@ def overrides_for(agent: dict) -> dict:
             ov["grok_model"] = agent["model"]
         elif agent["provider"] == "gemini" and agent.get("model"):
             ov["gemini_model"] = agent["model"]
+        elif agent["provider"] == "openai_compat" and agent.get("model"):
+            ov["oai_compat_model"] = agent["model"]
     return ov

@@ -61,6 +61,7 @@ SECRET_KEYS = {
     "grok_oauth_token",
     "grok_oauth_refresh",
     "gemini_api_key",
+    "oai_compat_api_key",
 }
 
 

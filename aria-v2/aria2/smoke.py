@@ -495,6 +495,36 @@ def run_smoke() -> int:
     check("gemini capabilities: tools + huge context",
           gcaps.supports_tools and gcaps.context_window >= 1_000_000)
 
+    # ── Generic OpenAI-compatible provider (LM Studio / vLLM / OpenRouter / …) ──
+    from aria2.models.openai_compat_provider import (
+        OpenAICompatProvider, _normalize_base_url)
+    check("oai-compat normalizes a bare host to an OpenAI /v1 base",
+          _normalize_base_url("http://localhost:1234") == "http://localhost:1234/v1"
+          and _normalize_base_url("https://openrouter.ai/api/v1/") == "https://openrouter.ai/api/v1")
+    ocp = OpenAICompatProvider("http://localhost:1234", api_key="")
+    check("oai-compat provider has the right name", ocp.name == "openai_compat")
+    config.set_key("oai_compat_tool_mode", "never")
+    check("oai-compat tool_mode=never disables tools (graceful fallback)",
+          ocp.capabilities("any-model").supports_tools is False)
+    config.set_key("oai_compat_tool_mode", "auto")
+    config.set_key("oai_compat_num_ctx", 16384)
+    _occ = ocp.capabilities("any-model")
+    check("oai-compat auto enables tools + honours num_ctx",
+          _occ.supports_tools is True and _occ.context_window == 16384)
+    config.set_key("oai_compat_num_ctx", 8192)
+    oc_prov, oc_model = model_registry.for_settings(
+        {"provider": "openai_compat", "oai_compat_base_url": "http://localhost:1234",
+         "oai_compat_model": "local-model"})
+    check("registry routes openai_compat with base url + model",
+          oc_prov.name == "openai_compat" and oc_model == "local-model")
+    check("provider_configured: openai_compat needs a base url + model",
+          config.provider_configured({"provider": "openai_compat",
+                                      "oai_compat_base_url": "http://x/v1",
+                                      "oai_compat_model": "m"})
+          and not config.provider_configured({"provider": "openai_compat",
+                                              "oai_compat_base_url": "",
+                                              "oai_compat_model": ""}))
+
     # ── Update manifest generator ─────────────────────────────────────────────
     import subprocess
     import sys

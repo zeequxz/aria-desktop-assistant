@@ -55,4 +55,14 @@ def for_settings(s: dict, overrides: dict | None = None) -> tuple[Provider, str]
         return GeminiProvider(s.get("gemini_api_key", "")), s.get(
             "gemini_model", "gemini-2.0-flash"
         )
+    if provider == "openai_compat":
+        from aria2.models.openai_compat_provider import OpenAICompatProvider
+
+        return (
+            OpenAICompatProvider(
+                base_url=s.get("oai_compat_base_url", ""),
+                api_key=s.get("oai_compat_api_key", ""),
+            ),
+            s.get("oai_compat_model", ""),
+        )
     raise RuntimeError(f"Unknown provider: {provider}")

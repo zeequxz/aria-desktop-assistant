@@ -62,6 +62,14 @@ DEFAULTS: dict = {
     #   "always" = force-enable (e.g. vLLM/LM Studio serving a capable model),
     #   "never"  = disable tools, converse only (most reliable on weak models).
     "ollama_tool_mode": "auto",
+    # Generic OpenAI-compatible endpoint (LM Studio / vLLM / llama.cpp / LocalAI /
+    # KoboldCpp / Text-Generation-WebUI / OpenRouter / any /v1 chat server).
+    # base_url accepts a bare host (http://localhost:1234) — /v1 is appended.
+    "oai_compat_base_url": "http://localhost:1234/v1",
+    "oai_compat_api_key": "",        # required for OpenRouter; blank for local
+    "oai_compat_model": "",
+    "oai_compat_num_ctx": 8192,
+    "oai_compat_tool_mode": "auto",  # auto/always = tools on; never = converse only
     # Gemini (Google) — OpenAI-compatible endpoint; API key from AI Studio.
     "gemini_model": "gemini-2.0-flash",
     "gemini_api_key": "",
@@ -227,6 +235,9 @@ def provider_configured(settings: dict | None = None) -> bool:
         return bool(s.get("grok_api_key") or s.get("grok_oauth_token"))
     if p == "gemini":
         return bool(s.get("gemini_api_key"))
+    if p == "openai_compat":
+        # Local servers need no key; only a base URL + model are required.
+        return bool(s.get("oai_compat_base_url") and s.get("oai_compat_model"))
     return False
 
 

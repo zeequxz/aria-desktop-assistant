@@ -8,7 +8,7 @@ from aria2.core import config
 from aria2.ui import theme
 from aria2.ui.views import widgets as w
 
-_PROVIDERS = ["claude", "openai", "local", "grok", "gemini"]
+_PROVIDERS = ["claude", "openai", "local", "grok", "gemini", "openai_compat"]
 _EMBED = ["local", "voyage", "openai"]
 _POLICY = ["ask", "allow", "deny"]
 
@@ -73,6 +73,10 @@ class SettingsView(ctk.CTkFrame):
         self._field(prov, "ollama_model", "Ollama model (default, loaded on startup)", s)
         self._field(prov, "ollama_idle_unload_min",
                     "Unload local model after N minutes idle (0 = never)", s)
+        self._field(prov, "ollama_num_ctx",
+                    "Ollama context window (tokens — match your model's num_ctx)", s)
+        self._field(prov, "ollama_tool_mode",
+                    "Ollama tool calling: auto / always / never", s)
         ctk.CTkButton(prov, text="🦙  Set up local AI (wizard for beginners)",
                       height=36, fg_color=theme.SURFACE_2, hover_color=theme.HOVER,
                       text_color=theme.TEXT, font=theme.f(-1),
@@ -119,6 +123,18 @@ class SettingsView(ctk.CTkFrame):
         # Gemini (Google).
         self._field(prov, "gemini_api_key", "Gemini (Google) API key", s, secret=True)
         self._field(prov, "gemini_model", "Gemini model", s)
+
+        # Generic OpenAI-compatible server (LM Studio / vLLM / llama.cpp / LocalAI /
+        # KoboldCpp / Text-Generation-WebUI / OpenRouter). Set provider=openai_compat.
+        self._field(prov, "oai_compat_base_url",
+                    "OpenAI-compatible base URL (LM Studio / vLLM / OpenRouter…)", s)
+        self._field(prov, "oai_compat_api_key",
+                    "OpenAI-compatible API key (blank for local servers)", s, secret=True)
+        self._field(prov, "oai_compat_model", "OpenAI-compatible model name", s)
+        self._field(prov, "oai_compat_num_ctx",
+                    "OpenAI-compatible context window (tokens)", s)
+        self._field(prov, "oai_compat_tool_mode",
+                    "OpenAI-compatible tool calling: auto / always / never", s)
 
         # ── Embeddings ──────────────────────────────────────────────────────
         emb = self._section("Embeddings (memory + knowledge)", prov=p_tab)
@@ -621,7 +637,8 @@ class SettingsView(ctk.CTkFrame):
         s["ambient_enabled"] = ambient_on
         for key, entry in self._entries.items():
             v = entry.get().strip()
-            if key in ("max_tokens", "max_iterations", "heartbeat_interval"):
+            if key in ("max_tokens", "max_iterations", "heartbeat_interval",
+                       "ollama_num_ctx", "oai_compat_num_ctx"):
                 try:
                     v = int(v)
                 except ValueError:
