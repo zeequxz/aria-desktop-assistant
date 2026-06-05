@@ -44,21 +44,65 @@ def _scheme_ok(url: str) -> bool:
     return urllib.parse.urlparse(url).scheme.lower() in _ALLOWED_SCHEMES
 
 
-def check_for_update(manifest_url: str | None = None) -> dict | None:
-    """Return {version, url, notes} if a newer version is published, else None."""
-    url = manifest_url or config.get("update_manifest_url", "")
-    if not url or not _scheme_ok(url):
-        return None
+def _fetch_manifest(url: str) -> tuple[dict | None, str]:
+    """Fetch + parse the update manifest. Returns (manifest, error); error is ""
+    on success, otherwise a human message — so callers can tell a *failed check*
+    apart from *no update available* (both used to collapse to None, which the UI
+    then showed as a false 'Up to date')."""
+    if not url:
+        return None, "No update manifest URL configured."
+    if not _scheme_ok(url):
+        return None, "Manifest URL must be http(s)."
     try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            manifest = json.loads(resp.read().decode("utf-8"))
-    except Exception:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": f"ARIA2/{__version__}",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8")), ""
+    except Exception as e:
+        return None, f"Couldn't reach the update server ({e})."
+
+
+def _manifest_url(override: str | None = None) -> str:
+    """Resolve the manifest URL, falling back to the built-in default when the
+    saved config has it blank — some upgraded installs persisted an empty value,
+    which silently broke every update check (it looked like 'up to date')."""
+    return (override or config.get("update_manifest_url")
+            or config.DEFAULTS.get("update_manifest_url", ""))
+
+
+def check_for_update(manifest_url: str | None = None) -> dict | None:
+    """Return {version, url, notes, current} if a newer version is published, else
+    None. NOTE: None means 'no update' OR 'check failed' — use check_status() when
+    you need to tell those apart (e.g. in the Settings UI)."""
+    url = _manifest_url(manifest_url)
+    manifest, _err = _fetch_manifest(url)
+    if not manifest:
         return None
     remote = manifest.get("version", "")
     if remote and is_newer(remote):
         return {"version": remote, "url": manifest.get("url", ""),
                 "notes": manifest.get("notes", ""), "current": __version__}
     return None
+
+
+def check_status(manifest_url: str | None = None) -> dict:
+    """Rich update status for the UI. Always reports the running version and
+    distinguishes the three outcomes.
+
+    Returns {"status": "update"|"current"|"error", "current": <running version>,
+    plus "version"/"url"/"notes" for an update, or "error" for a failed check}."""
+    url = _manifest_url(manifest_url)
+    manifest, err = _fetch_manifest(url)
+    if not manifest:
+        return {"status": "error", "current": __version__, "error": err}
+    remote = manifest.get("version", "")
+    if remote and is_newer(remote):
+        return {"status": "update", "current": __version__, "version": remote,
+                "url": manifest.get("url", ""), "notes": manifest.get("notes", "")}
+    return {"status": "current", "current": __version__,
+            "version": remote or __version__}
 
 
 def download_update(asset_url: str) -> dict:

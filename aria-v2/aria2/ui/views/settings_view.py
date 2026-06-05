@@ -360,7 +360,16 @@ class SettingsView(ctk.CTkFrame):
 
         # ── Updates ─────────────────────────────────────────────────────────
         upd = self._section("Updates", prov=u_tab)
+        import aria2 as _aria2
+        ctk.CTkLabel(upd, text=f"Current version:  v{_aria2.__version__}",
+                     font=theme.f(0, "bold"), text_color=theme.TEXT).pack(
+            anchor="w", pady=(0, 6))
         self._field(upd, "update_manifest_url", "Update manifest URL", s)
+        # Heal a blank manifest URL: show the built-in default so a Save persists
+        # it (older configs saved an empty value, which broke update checks).
+        _murl = self._entries["update_manifest_url"]
+        if not _murl.get().strip():
+            _murl.insert(0, config.DEFAULTS.get("update_manifest_url", ""))
         self.auto_upd = ctk.CTkCheckBox(upd, text="Check for updates on launch",
                                         font=theme.f(-1))
         self.auto_upd.pack(anchor="w", pady=6)
@@ -543,21 +552,33 @@ class SettingsView(ctk.CTkFrame):
         url = self._entries["update_manifest_url"].get().strip()
 
         def worker():
-            info = update_service.check_for_update(url or None)
-            self.after(0, lambda: self._show_update(info))
+            st = update_service.check_status(url or None)
+            self.after(0, lambda: self._show_update(st))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _show_update(self, info):
-        self._pending_update = info
-        if not info:
-            self.update_status.configure(text="Up to date ✓", text_color=theme.SUCCESS)
+    def _show_update(self, st):
+        # st is the rich check_status() result: distinguishes update / current /
+        # error and always carries the running version, so a failed check no
+        # longer masquerades as "up to date".
+        status = (st or {}).get("status", "error")
+        cur = (st or {}).get("current", "?")
+        self._pending_update = st if status == "update" else None
+        if status == "update":
+            self.update_status.configure(
+                text=f"Update available: v{st['version']}  (you have v{cur})"
+                     + (f" — {st.get('notes','')[:40]}" if st.get('notes') else ""),
+                text_color=theme.WARN)
+            self.dl_btn.pack(side="left", padx=6)
+        elif status == "error":
+            self.update_status.configure(
+                text=f"Couldn't check for updates (on v{cur}): {st.get('error','')[:60]}",
+                text_color=theme.DANGER)
             self.dl_btn.pack_forget()
-            return
-        self.update_status.configure(
-            text=f"v{info['version']} available — {info.get('notes','')[:50]}",
-            text_color=theme.WARN)
-        self.dl_btn.pack(side="left", padx=6)
+        else:  # current
+            self.update_status.configure(text=f"Up to date ✓  (v{cur})",
+                                         text_color=theme.SUCCESS)
+            self.dl_btn.pack_forget()
 
     def _download_update(self):
         import threading

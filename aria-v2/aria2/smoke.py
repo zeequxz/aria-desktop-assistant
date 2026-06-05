@@ -32,6 +32,11 @@ def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="aria2_smoke_"))
     config.DB_FILE = tmp / "aria2.db"
     config.CONFIG_FILE = tmp / "config.json"
+    # Also redirect app_dir so file-based stores (evals reports, knowledge,
+    # downloads) write into the throwaway dir instead of the real %APPDATA%/ARIA2
+    # — otherwise repeated smoke runs accumulate eval reports there and eventually
+    # trip load_history()'s cap (and pollute the user's real Evals chart).
+    config.app_dir = lambda _d=tmp: (_d.mkdir(parents=True, exist_ok=True) or _d)
     config._cache = None
     db._conn = None
 
@@ -306,6 +311,26 @@ def run_smoke() -> int:
           "error" in update_service.download_update("file:///etc/passwd"))
     check("check_for_update ignores a non-http(s) manifest URL",
           update_service.check_for_update("file:///tmp/manifest.json") is None)
+    # check_status distinguishes the three outcomes + always reports the running
+    # version (the old code collapsed 'check failed' into a false 'up to date').
+    st_up = _status_via_server(update_service, "99.0.0")
+    check("check_status flags an available update with the current version",
+          st_up["status"] == "update" and st_up["version"] == "99.0.0"
+          and st_up["current"] == update_service.__version__)
+    check("check_status reports 'current' when the manifest is not newer",
+          _status_via_server(update_service, "0.0.1")["status"] == "current")
+    st_err = update_service.check_status("http://127.0.0.1:9/nope.json")
+    check("check_status reports 'error' on a failed check (not a false up-to-date)",
+          st_err["status"] == "error"
+          and st_err["current"] == update_service.__version__)
+    # The real-world bug: an upgraded config persisted a BLANK manifest URL, so
+    # every check failed silently. Resolve to the built-in default when blank.
+    config.set_key("update_manifest_url", "")
+    check("blank manifest URL falls back to the built-in default; override wins",
+          update_service._manifest_url() == config.DEFAULTS.get("update_manifest_url")
+          and update_service._manifest_url("http://x/m.json") == "http://x/m.json")
+    config.set_key("update_manifest_url",
+                   config.DEFAULTS.get("update_manifest_url", ""))
 
     # ── Computer-use tools + access levels ────────────────────────────────────
     from aria2.runtime.tools.registry import build_toolset
@@ -958,6 +983,32 @@ def _check_update_via_server(update_service):
     port = httpd.server_address[1]
     try:
         return update_service.check_for_update(f"http://127.0.0.1:{port}/manifest.json")
+    finally:
+        httpd.shutdown()
+
+
+def _status_via_server(update_service, version: str):
+    """Serve a manifest with the given version and return check_status() against it."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = json.dumps({"version": version, "url": "http://x/app.zip",
+                               "notes": "test"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    try:
+        return update_service.check_status(f"http://127.0.0.1:{port}/manifest.json")
     finally:
         httpd.shutdown()
 

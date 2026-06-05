@@ -29,7 +29,7 @@ _TOOL_CAPABLE = {
     "mixtral",
     "phi4",
     "codestral",
-    "deepseek-r1:7b", "deepseek-r1:14b",
+    "deepseek-r1:7b", "deepseek-r1:14b", "deepseek-r1:32b",
     "hermes3",
     "firefunction",
     "command-r",

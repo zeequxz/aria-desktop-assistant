@@ -63,6 +63,14 @@ _MODELS = [
      "Near-GPT-4 quality. Needs 48 GB+ RAM or a powerful GPU."),
     ("deepseek-r1:14b","DeepSeek R1 · 14B", 9.0, "◐ Medium",    "★★★★★",
      "Best reasoning quality in the <15 GB range. Needs 16 GB RAM."),
+    ("qwen3:30b",      "Qwen 3 · 30B (MoE)", 19.0, "◐ Medium",  "★★★★★",
+     "30B mixture-of-experts with only ~3B active — large-model quality at "
+     "mid-size speed. Native tool use. Needs 24 GB RAM or a GPU."),
+    ("qwen3:32b",      "Qwen 3 · 32B",      20.0, "🐢 Slow",      "★★★★★",
+     "Dense 32B — top open-weight quality with strong tool calling. "
+     "Needs 32 GB RAM or a capable GPU."),
+    ("deepseek-r1:32b","DeepSeek R1 · 32B", 20.0, "🐢 Slow",      "★★★★★",
+     "Deep step-by-step reasoning at 32B. Needs 32 GB RAM or a GPU."),
     ("codellama:7b",   "Code Llama · 7B",   5.0, "◐ Medium",    "★★★★",
      "Fine-tuned on code. Best choice if you mainly write or review code."),
     ("nomic-embed-text","Nomic Embed",       0.8, "⚡ Very fast", "N/A",
@@ -176,16 +184,22 @@ class LocalAIWizard(ctk.CTkToplevel):
 
     def _recommend_model(self) -> str:
         ram = self._ram
-        # Prefer modern, tool-capable models. The small llama3.2 (1b/3b) models
-        # are chat-only (see model_caps), so we no longer recommend 3b by default.
-        if getattr(self, "_has_gpu", False):
-            if ram <= 0 or ram >= 8:
+        gpu = getattr(self, "_has_gpu", False)
+        # With a GPU, large models run fast — scale up with available memory.
+        if gpu:
+            if ram <= 0 or ram >= 16:
                 return "qwen3:8b"
-            return "qwen3:4b"
-        if ram <= 0 or ram >= 16:
-            return "qwen3:8b"
-        if ram >= 8:
-            return "qwen3:4b"
+            if ram >= 8:
+                return "qwen3:4b"
+            return "llama3.2:3b"
+        # CPU only: response speed is gated by MODEL SIZE, not RAM — an 8B model
+        # is slow on CPU even with 32 GB free. So keep the default small and
+        # snappy; users who want more quality can pick a bigger model from the
+        # list (each row is speed-labelled). Prefer modern tool-capable models.
+        if ram <= 0 or ram >= 8:
+            return "qwen3:4b"      # ~4B: fast on CPU + reliable tool calling
+        if ram >= 4:
+            return "llama3.2:3b"   # very light (chat-only)
         return "llama3.2:1b"
 
     def _render(self):
