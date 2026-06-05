@@ -333,7 +333,8 @@ class ARIAApp(ctk.CTk):
             "About ARIA v2",
             f"ARIA v2  ·  version {aria2.__version__}\n\n"
             "Local-first AI workstation.\n\n"
-            "Providers: Claude · OpenAI · Grok · Gemini · Ollama\n"
+            "Providers: Claude · OpenAI · Grok · Gemini · Ollama · "
+            "OpenAI-compatible (LM Studio/vLLM/OpenRouter…)\n"
             "Keys + tokens encrypted at rest (DPAPI)\n\n"
             "Press Ctrl+K for the command palette.\n"
             "Press ? in the Runs view to see all keyboard shortcuts.",
