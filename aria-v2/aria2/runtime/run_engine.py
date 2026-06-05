@@ -243,7 +243,13 @@ class RunEngine:
             summariser=lambda t: self._oneshot(provider, model, t),
         )
         system = compiled.system
-        if can_delegate:
+        # Only advertise tools in the system prompt when we'll actually pass tool
+        # schemas to the model this run. Otherwise a weak local model (tools off,
+        # e.g. llama3.2:3b) or plan mode would be told to call tools it can't
+        # invoke — and small models then emit fake tool-call text (a bare `{}`)
+        # instead of a normal reply.
+        tools_active = caps.supports_tools and not req.plan_only
+        if can_delegate and tools_active:
             system += (
                 "\n\nYou can coordinate specialist agents. For a complex job, call "
                 "suggest_agent to see who is best suited (rankings are learned from "
@@ -258,7 +264,7 @@ class RunEngine:
             reach.append("notify_user (message the user on Telegram)")
         if "post_discord" in names:
             reach.append("post_discord (post to a Discord channel)")
-        if reach:
+        if reach and tools_active:
             channels = " and ".join(reach)
             system += (
                 f"\n\nTool available: {channels}."

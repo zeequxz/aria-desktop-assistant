@@ -359,6 +359,15 @@ def run_smoke() -> int:
     config.set_key("ollama_tool_mode", "auto")
     config.set_key("ollama_num_ctx", 8192)
 
+    # Small llama3.2 (1b/3b) models over-trigger tool calling on plain chat
+    # (a "hello" returns an empty `{}` function call), so they're chat-only;
+    # llama3.1:8b stays tool-capable.
+    from aria2.models.model_caps import ollama_tool_support
+    check("llama3.2 1b/3b are NOT tool-capable; llama3.1:8b is",
+          ollama_tool_support("llama3.2:3b") is False
+          and ollama_tool_support("llama3.2:1b") is False
+          and ollama_tool_support("llama3.1:8b") is True)
+
     # Telegram allowlist gating (no network — uses handle_message directly).
     config.set_key("telegram_allowlist", ["123"])
     config.set_key("messaging_access", "chat_only")
@@ -462,6 +471,12 @@ def run_smoke() -> int:
         sys_note = _capture_system({"discord_webhook_url": f"{base}/default"}, p, a)
         check("system prompt advertises proactive reach (post_discord)",
               "post_discord" in sys_note)
+        # ...but NOT when tools are off (weak local model) — otherwise the model
+        # is told to call tools it can't invoke and emits fake tool-call text.
+        sys_notools = _capture_system({"discord_webhook_url": f"{base}/default"},
+                                      p, a, supports_tools=False)
+        check("no tool advertising in the system prompt when tools are off",
+              "post_discord" not in sys_notools)
     finally:
         config.set_key("discord_webhook_url", "")
         config.set_key("discord_channels", [])
@@ -767,7 +782,8 @@ def _provider_oauth_refresh(provider_auth, prefix: str) -> str:
         httpd.shutdown()
 
 
-def _capture_system(extra_settings: dict, project, agent) -> str:
+def _capture_system(extra_settings: dict, project, agent,
+                    supports_tools: bool = True) -> str:
     """Run a stub engine turn and return the system prompt the model received."""
     captured = {"system": ""}
 
@@ -776,7 +792,7 @@ def _capture_system(extra_settings: dict, project, agent) -> str:
 
         def capabilities(self, model):
             from aria2.models.base import Capabilities
-            return Capabilities(supports_tools=True, supports_caching=False)
+            return Capabilities(supports_tools=supports_tools, supports_caching=False)
 
         def count_tokens(self, text):
             return len(text) // 4

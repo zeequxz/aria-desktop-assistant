@@ -16,10 +16,13 @@ from __future__ import annotations
 # Models (or name fragments) confirmed to work with tool calling via Ollama /v1.
 _TOOL_CAPABLE = {
     "llama3.1",       # 8b, 70b, 405b — all support tools
-    "llama3.2",       # 1b, 3b support tools (though 1b is weak)
     "llama3.3",
-    # NOTE: llama3:latest intentionally NOT here — it's the original April-2024
-    # llama3, which has poor tool calling. Use llama3.1:8b or llama3.2:3b.
+    # NOTE: llama3:latest AND llama3.2 (1b/3b) are intentionally NOT here.
+    # The original llama3 has poor tool calling. The small llama3.2 models
+    # advertise tool support but over-trigger on ordinary chat — a plain "hello"
+    # comes back as an empty `{}` "function call" plus meta-commentary instead of
+    # a reply. Keeping tools off lets them converse cleanly. For reliable local
+    # tool calling use llama3.1:8b (or qwen2.5:7b).
     "qwen2.5:7b", "qwen2.5:14b", "qwen2.5:32b", "qwen2.5:72b",
     "mistral:7b", "mistral:latest", "mistral-nemo",
     "mixtral",
