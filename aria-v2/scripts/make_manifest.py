@@ -11,9 +11,18 @@ zipping; can also be run locally.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
+
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _version_from_package() -> str:
@@ -33,10 +42,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--url", default="")
     ap.add_argument("--notes", default="")
     ap.add_argument("--out", default="latest.json")
+    ap.add_argument("--zip", default="", help="zip to hash (adds sha256 to manifest)")
+    ap.add_argument("--sha256", default="", help="precomputed sha256 (overrides --zip)")
     a = ap.parse_args(argv)
 
     version = a.version or _version_from_package()
     manifest = {"version": version, "url": a.url, "notes": a.notes}
+    sha = a.sha256 or (_sha256(a.zip) if a.zip else "")
+    if sha:
+        manifest["sha256"] = sha
     Path(a.out).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(json.dumps(manifest))
     return 0

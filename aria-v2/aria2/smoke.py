@@ -340,11 +340,21 @@ def run_smoke() -> int:
     from pathlib import Path as _PPu
     _ubat = update_service._write_updater_bat(
         _PPu(_tfu.mkdtemp(prefix="aria2_upd_")), 4242,
-        _PPu("C:/src/app"), _PPu("C:/dest/app"))
+        _PPu("C:/src/app"), _PPu("C:/dest/app"), _PPu("C:/bak/app"))
     _ubt = _ubat.read_text(encoding="utf-8")
-    check("updater script waits for the pid, copies the build, and relaunches",
-          "4242" in _ubt and "robocopy" in _ubt.lower()
-          and "ARIA2.exe" in _ubt and "waitloop" in _ubt)
+    check("updater script waits, backs up, installs, relaunches, and rolls back",
+          "4242" in _ubt and _ubt.lower().count("robocopy") >= 3
+          and "ARIA2.exe" in _ubt and "waitloop" in _ubt
+          and "bak" in _ubt and "errorlevel 1" in _ubt)
+    # SHA-256: helper matches hashlib; check_status surfaces the manifest hash.
+    import hashlib as _hl
+    _hf = _PPu(_tfu.mkdtemp(prefix="aria2_sha_")) / "x.bin"
+    _hf.write_bytes(b"hello aria")
+    check("update _sha256_file matches hashlib",
+          update_service._sha256_file(_hf) == _hl.sha256(b"hello aria").hexdigest())
+    check("check_status surfaces the manifest sha256 for verification",
+          _status_via_server(update_service, "99.0.0", "deadbeef").get("sha256")
+          == "deadbeef")
 
     # ── Computer-use tools + access levels ────────────────────────────────────
     from aria2.runtime.tools.registry import build_toolset
@@ -631,6 +641,17 @@ def run_smoke() -> int:
     man = json.loads(out.read_text())
     check("manifest generator writes version + url",
           man["version"] == "9.9.9" and man["url"] == "http://x/app.zip")
+    # --zip makes the manifest carry a sha256 the in-app updater verifies.
+    import hashlib as _hl0
+    _zf = Path(tempfile.mkdtemp()) / "ARIA2-9.9.9.zip"
+    _zf.write_bytes(b"pretend-zip-bytes")
+    out2 = Path(tempfile.mkdtemp()) / "latest.json"
+    subprocess.run([sys.executable, "scripts/make_manifest.py", "--version", "9.9.9",
+                    "--url", "http://x/app.zip", "--zip", str(_zf), "--out", str(out2)],
+                   cwd=str(Path(__file__).resolve().parents[1]), capture_output=True)
+    man2 = json.loads(out2.read_text())
+    check("manifest generator embeds the zip sha256",
+          man2.get("sha256") == _hl0.sha256(b"pretend-zip-bytes").hexdigest())
 
     # ── Hardening cycle: perf + security regression tests ─────────────────────
     pchat = chat_service.create_chat(p["id"], agent_id=a["id"])
@@ -1048,8 +1069,9 @@ def _check_update_via_server(update_service):
         httpd.shutdown()
 
 
-def _status_via_server(update_service, version: str):
-    """Serve a manifest with the given version and return check_status() against it."""
+def _status_via_server(update_service, version: str, sha: str = ""):
+    """Serve a manifest with the given version (+ optional sha256) and return
+    check_status() against it."""
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1058,8 +1080,10 @@ def _status_via_server(update_service, version: str):
             pass
 
         def do_GET(self):
-            body = json.dumps({"version": version, "url": "http://x/app.zip",
-                               "notes": "test"}).encode()
+            payload = {"version": version, "url": "http://x/app.zip", "notes": "test"}
+            if sha:
+                payload["sha256"] = sha
+            body = json.dumps(payload).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()

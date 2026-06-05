@@ -598,7 +598,8 @@ class SettingsView(ctk.CTkFrame):
 
             def worker():
                 res = update_service.download_and_install(
-                    url, on_status=lambda m: self.after(
+                    url, sha256=self._pending_update.get("sha256"),
+                    on_status=lambda m: self.after(
                         0, lambda: self.update_status.configure(
                             text=m, text_color=theme.TEXT_DIM)))
                 if res.get("ok") and res.get("relaunch"):

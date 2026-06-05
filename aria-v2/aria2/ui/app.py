@@ -387,6 +387,7 @@ class ARIAApp(ctk.CTk):
                     "version": self._update_info.get("version", ""),
                     "url": self._update_info.get("url", ""),
                     "notes": self._update_info.get("notes", ""),
+                    "sha256": self._update_info.get("sha256", ""),
                 })
             except Exception:
                 pass

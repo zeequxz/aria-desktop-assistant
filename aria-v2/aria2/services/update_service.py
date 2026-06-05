@@ -89,7 +89,8 @@ def check_for_update(manifest_url: str | None = None) -> dict | None:
     remote = manifest.get("version", "")
     if remote and is_newer(remote):
         return {"version": remote, "url": manifest.get("url", ""),
-                "notes": manifest.get("notes", ""), "current": __version__}
+                "notes": manifest.get("notes", ""), "current": __version__,
+                "sha256": manifest.get("sha256", "")}
     return None
 
 
@@ -106,7 +107,8 @@ def check_status(manifest_url: str | None = None) -> dict:
     remote = manifest.get("version", "")
     if remote and is_newer(remote):
         return {"status": "update", "current": __version__, "version": remote,
-                "url": manifest.get("url", ""), "notes": manifest.get("notes", "")}
+                "url": manifest.get("url", ""), "notes": manifest.get("notes", ""),
+                "sha256": manifest.get("sha256", "")}
     return {"status": "current", "current": __version__,
             "version": remote or __version__}
 
@@ -144,11 +146,21 @@ def install_root() -> Path | None:
     return Path(sys.executable).resolve().parent
 
 
-def download_and_install(asset_url: str, on_status=None) -> dict:
-    """Download the update zip, stage it, and hand off to a detached helper that
-    waits for ARIA to exit, copies the new build over the install folder, and
-    relaunches. On {"ok": True, "relaunch": True} the CALLER must quit the app so
-    the locked files can be replaced.
+def _sha256_file(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download_and_install(asset_url: str, sha256: str | None = None, on_status=None) -> dict:
+    """Download the update zip, verify its SHA-256 (if provided), stage it, and
+    hand off to a detached helper that waits for ARIA to exit, backs up the
+    current build, copies the new build over the install folder, relaunches, and
+    rolls back if the new build fails to start. On {"ok": True, "relaunch": True}
+    the CALLER must quit the app so the locked files can be replaced.
 
     Packaged build only — from source it returns an error (update with git)."""
     def status(msg: str) -> None:
@@ -174,6 +186,14 @@ def download_and_install(asset_url: str, on_status=None) -> dict:
             asset_url, headers={"User-Agent": f"ARIA2/{__version__}"})
         with urllib.request.urlopen(req, timeout=180) as resp, open(zip_path, "wb") as f:
             shutil.copyfileobj(resp, f)
+        # Integrity check — refuse to install a corrupt / tampered download.
+        if sha256:
+            status("Verifying…")
+            actual = _sha256_file(zip_path)
+            if actual.lower() != sha256.strip().lower():
+                return {"error": "Downloaded update failed its SHA-256 integrity "
+                                 f"check (expected {sha256[:12]}…, got {actual[:12]}…). "
+                                 "Update aborted; your install is untouched."}
         status("Extracting…")
         staging = work / "new"
         with zipfile.ZipFile(zip_path) as z:
@@ -186,7 +206,7 @@ def download_and_install(asset_url: str, on_status=None) -> dict:
                 return {"error": "Update package did not contain ARIA2.exe."}
             src = found
         status("Installing — ARIA will restart…")
-        bat = _write_updater_bat(work, os.getpid(), src, dest)
+        bat = _write_updater_bat(work, os.getpid(), src, dest, work / "backup")
         # Detached + own process group so it outlives this process and can
         # replace the (now-unlocked, after we exit) install files.
         subprocess.Popen(["cmd", "/c", str(bat)],
@@ -196,9 +216,12 @@ def download_and_install(asset_url: str, on_status=None) -> dict:
         return {"error": str(e)}
 
 
-def _write_updater_bat(work: Path, pid: int, src: Path, dest: Path) -> Path:
-    """Write the helper batch script: wait for ARIA (pid) to exit, mirror the new
-    build (src) over the install folder (dest), then relaunch ARIA2.exe."""
+def _write_updater_bat(work: Path, pid: int, src: Path, dest: Path, backup: Path) -> Path:
+    """Write the helper batch script. Once ARIA (pid) exits it: backs up the
+    current build, installs the new build over it, relaunches ARIA2.exe, and —
+    if the new build isn't running a few seconds later — rolls back to the
+    backup and relaunches that. Best-effort, but a bad update can't brick it."""
+    exe = f"{dest}\\ARIA2.exe"
     bat = work / "aria2_update.bat"
     script = (
         "@echo off\r\n"
@@ -210,8 +233,19 @@ def _write_updater_bat(work: Path, pid: int, src: Path, dest: Path) -> Path:
         "  goto waitloop\r\n"
         ")\r\n"
         "ping -n 3 127.0.0.1 >NUL\r\n"
+        ":: back up the current build before overwriting it\r\n"
+        f'robocopy "{dest}" "{backup}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS >NUL\r\n'
+        ":: install the new build\r\n"
         f'robocopy "{src}" "{dest}" /E /IS /IT /R:3 /W:1 /NFL /NDL /NJH /NJS >NUL\r\n'
-        f'start "" "{dest}\\ARIA2.exe"\r\n'
+        f'start "" "{exe}"\r\n'
+        ":: give it time to come up, then roll back if it didn\'t\r\n"
+        "ping -n 14 127.0.0.1 >NUL\r\n"
+        'tasklist /FI "IMAGENAME eq ARIA2.exe" 2>NUL | find /I "ARIA2.exe" >NUL\r\n'
+        "if errorlevel 1 (\r\n"
+        f'  robocopy "{backup}" "{dest}" /E /IS /IT /R:3 /W:1 /NFL /NDL /NJH /NJS >NUL\r\n'
+        f'  start "" "{exe}"\r\n'
+        ")\r\n"
+        f'rmdir /S /Q "{backup}" >NUL 2>&1\r\n'
     )
     bat.write_text(script, encoding="utf-8")
     return bat

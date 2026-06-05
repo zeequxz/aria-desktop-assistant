@@ -47,7 +47,7 @@ jobs:
           Compress-Archive -Path dist/ARIA2/* -DestinationPath $zip -Force
           $url = "https://github.com/$env:REPO/releases/download/$env:TAG/$zip"
           python scripts/make_manifest.py --version $ver --url $url `
-            --notes "ARIA v2 $ver" --out latest.json
+            --notes "ARIA v2 $ver" --zip $zip --out latest.json
           Get-Content latest.json
 
       - name: Upload build artifacts
