@@ -5,4 +5,5 @@ _screenshot.png
 build/
 dist/
 *.spec
+!aria2.spec   # the PyInstaller spec IS committed — the release workflow needs it
 .venv/
