@@ -207,10 +207,11 @@ def download_and_install(asset_url: str, sha256: str | None = None, on_status=No
             src = found
         status("Installing — ARIA will restart…")
         bat = _write_updater_bat(work, os.getpid(), src, dest, work / "backup")
-        # Detached + own process group so it outlives this process and can
-        # replace the (now-unlocked, after we exit) install files.
+        # Hidden window (CREATE_NO_WINDOW) + its own process group so it runs
+        # invisibly and outlives this process (Windows doesn't cascade-kill
+        # children) to replace the now-unlocked install files once we exit.
         subprocess.Popen(["cmd", "/c", str(bat)],
-                         creationflags=0x00000008 | 0x00000200)  # DETACHED | NEW_GROUP
+                         creationflags=0x08000000 | 0x00000200)  # NO_WINDOW | NEW_GROUP
         return {"ok": True, "relaunch": True}
     except Exception as e:
         return {"error": str(e)}
@@ -226,21 +227,26 @@ def _write_updater_bat(work: Path, pid: int, src: Path, dest: Path, backup: Path
     script = (
         "@echo off\r\n"
         "chcp 65001 >NUL\r\n"
+        ":: wait (up to ~90s) for ARIA to exit so its files unlock. Match the\r\n"
+        ":: image name under the PID filter — matching the bare PID number could\r\n"
+        ":: false-match other columns and loop forever.\r\n"
+        "set /a tries=0\r\n"
         ":waitloop\r\n"
-        f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL\r\n'
-        "if not errorlevel 1 (\r\n"
-        "  ping -n 2 127.0.0.1 >NUL\r\n"
-        "  goto waitloop\r\n"
-        ")\r\n"
+        f'tasklist /FI "PID eq {pid}" /NH 2>NUL | find /I "ARIA2.exe" >NUL\r\n'
+        "if errorlevel 1 goto proceed\r\n"
+        "set /a tries+=1\r\n"
+        "if %tries% GEQ 90 goto proceed\r\n"
+        "ping -n 2 127.0.0.1 >NUL\r\n"
+        "goto waitloop\r\n"
+        ":proceed\r\n"
         "ping -n 3 127.0.0.1 >NUL\r\n"
-        ":: back up the current build before overwriting it\r\n"
+        ":: back up the current build, then install the new one over it\r\n"
         f'robocopy "{dest}" "{backup}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS >NUL\r\n'
-        ":: install the new build\r\n"
         f'robocopy "{src}" "{dest}" /E /IS /IT /R:3 /W:1 /NFL /NDL /NJH /NJS >NUL\r\n'
         f'start "" "{exe}"\r\n'
         ":: give it time to come up, then roll back if it didn\'t\r\n"
         "ping -n 14 127.0.0.1 >NUL\r\n"
-        'tasklist /FI "IMAGENAME eq ARIA2.exe" 2>NUL | find /I "ARIA2.exe" >NUL\r\n'
+        'tasklist /FI "IMAGENAME eq ARIA2.exe" /NH 2>NUL | find /I "ARIA2.exe" >NUL\r\n'
         "if errorlevel 1 (\r\n"
         f'  robocopy "{backup}" "{dest}" /E /IS /IT /R:3 /W:1 /NFL /NDL /NJH /NJS >NUL\r\n'
         f'  start "" "{exe}"\r\n'

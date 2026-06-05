@@ -630,8 +630,20 @@ class SettingsView(ctk.CTkFrame):
         """Quit so the detached updater can replace the files and relaunch."""
         self.update_status.configure(text="Update staged — restarting ARIA…",
                                      text_color=theme.SUCCESS)
-        if hasattr(self, "app"):
-            self.after(1200, self.app._real_quit)
+        self.after(1200, self._force_quit_for_update)
+
+    def _force_quit_for_update(self):
+        # Stop services for a clean handoff, then HARD-exit. A normal exit can
+        # hang on a lingering non-daemon thread (tray / discord / …), leaving the
+        # process alive — and the updater's wait-for-this-PID loop would then spin
+        # forever. os._exit guarantees the PID disappears so the update proceeds.
+        try:
+            if hasattr(self, "app"):
+                self.app._real_quit()
+        except Exception:
+            pass
+        import os
+        os._exit(0)
 
     def _section(self, title: str, prov=None) -> ctk.CTkFrame:
         parent = prov if prov is not None else self

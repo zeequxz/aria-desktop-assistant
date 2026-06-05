@@ -342,10 +342,10 @@ def run_smoke() -> int:
         _PPu(_tfu.mkdtemp(prefix="aria2_upd_")), 4242,
         _PPu("C:/src/app"), _PPu("C:/dest/app"), _PPu("C:/bak/app"))
     _ubt = _ubat.read_text(encoding="utf-8")
-    check("updater script waits, backs up, installs, relaunches, and rolls back",
+    check("updater waits (image-name + timeout), backs up, installs, rolls back",
           "4242" in _ubt and _ubt.lower().count("robocopy") >= 3
-          and "ARIA2.exe" in _ubt and "waitloop" in _ubt
-          and "bak" in _ubt and "errorlevel 1" in _ubt)
+          and "ARIA2.exe" in _ubt and "waitloop" in _ubt and "proceed" in _ubt
+          and "tries" in _ubt and "bak" in _ubt and "errorlevel 1" in _ubt)
     # SHA-256: helper matches hashlib; check_status surfaces the manifest hash.
     import hashlib as _hl
     _hf = _PPu(_tfu.mkdtemp(prefix="aria2_sha_")) / "x.bin"
