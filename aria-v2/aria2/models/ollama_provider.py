@@ -11,7 +11,9 @@ issuing real function calls. The OpenAI-compatible path fixes this.
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 
 from aria2.models.base import Capabilities
 from aria2.models.openai_provider import OpenAIProvider
@@ -106,23 +108,30 @@ class OllamaProvider(OpenAIProvider):
                     stop_reason = "tool_use"
 
             # --- Ollama text-as-tool-call rescue ---
-            # Some Ollama models (qwen2.5-coder, phi3 etc.) output tool calls as
-            # plain JSON text instead of structured API tool_calls.  Detect this:
-            # if the *entire* response is a JSON object with "name"+"arguments"
-            # and no real structured call was made, treat it as a tool call.
-            # We only do this when the full response is PURELY the JSON — partial
-            # JSON mixed with prose is left as-is (don't over-intercept).
+            # Local models sometimes WRITE tool calls as text instead of emitting
+            # structured tool_calls. When no real call was made, recover two shapes:
+            #   (a) the whole reply is a single JSON tool-call object, or
+            #   (b) the reply contains function-call syntax (often in ``` fences),
+            #       e.g.  write_file(path="x", content="...")  — common with small
+            #       qwen3 / llama models. Without this the calls just print as text
+            #       and nothing executes (no file written, no Telegram sent).
+            # Emit a "clear_text" event so the UI wipes the printed call from the
+            # streaming bubble before the real tool result is shown.
             if not partial:
                 full = "".join(text_buf).strip()
                 tc_obj = _parse_pure_tool_call(full)
                 if tc_obj:
-                    # The model wrote a tool call as text — execute it properly.
-                    # Emit a special "clear_text" event so the UI can wipe the
-                    # JSON fragment from the streaming bubble before showing the
-                    # real tool result.
                     yield StreamEvent(type="clear_text", text="")
                     stop_reason = "tool_use"
                     partial["0"] = tc_obj
+                elif tools:
+                    for i, c in enumerate(_extract_text_tool_calls(full, tools)):
+                        if i == 0:
+                            yield StreamEvent(type="clear_text", text="")
+                            stop_reason = "tool_use"
+                        partial[f"text_{i}"] = {
+                            "id": f"text_{i}", "name": c["name"],
+                            "args": json.dumps(c["input"]), "input": c["input"]}
 
             for slot in partial.values():
                 try:
@@ -163,3 +172,87 @@ def _parse_pure_tool_call(text: str) -> dict | None:
         return None
     args_str = json.dumps(args) if isinstance(args, dict) else (args or "{}")
     return {"id": "text_tc", "name": name, "args": args_str, "input": args}
+
+
+def _matching_paren(text: str, open_idx: int) -> int | None:
+    """Index of the ')' matching the '(' at `open_idx`, respecting string literals
+    (so parens inside quoted args don't throw off the balance)."""
+    depth, i, in_str, esc = 0, open_idx, None, False
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == in_str:
+                in_str = None
+        elif c in ("'", '"'):
+            in_str = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _parse_call_args(call_src: str, schema: dict) -> dict:
+    """Parse a `name(...)` snippet via the AST and return its arguments as a dict.
+    Handles keyword args; a lone positional maps to the schema's first required
+    field. Using the AST (not regex) means nested quotes / multiline string args
+    parse correctly."""
+    try:
+        node = ast.parse(call_src.strip(), mode="eval").body
+    except Exception:
+        return {}
+    if not isinstance(node, ast.Call):
+        return {}
+    out: dict = {}
+    for kw in node.keywords:
+        if kw.arg:
+            try:
+                out[kw.arg] = ast.literal_eval(kw.value)
+            except Exception:
+                pass
+    if node.args and not out and len(node.args) == 1:
+        props = list((schema.get("properties") or {}).keys())
+        required = schema.get("required") or props
+        target = required[0] if required else (props[0] if props else None)
+        if target:
+            try:
+                out[target] = ast.literal_eval(node.args[0])
+            except Exception:
+                pass
+    return out
+
+
+def _extract_text_tool_calls(text: str, tools: list[dict]) -> list[dict]:
+    """Recover tool calls a model wrote as TEXT — function-call syntax, often in
+    ``` code fences — instead of emitting structured tool_calls. Returns
+    [{name, input}] in source order. A match counts only when at least one
+    argument parses, so a plain prose mention of a tool name is ignored."""
+    schemas = {t["name"]: t.get("input_schema", {})
+               for t in (tools or []) if t.get("name")}
+    if not schemas:
+        return []
+    found: list[tuple[int, str, dict]] = []
+    for name in schemas:
+        for m in re.finditer(r"(?<![\w.])" + re.escape(name) + r"\s*\(", text):
+            end = _matching_paren(text, m.end() - 1)
+            if end is None:
+                continue
+            inp = _parse_call_args(name + text[m.end() - 1:end + 1], schemas[name])
+            if inp:
+                found.append((m.start(), name, inp))
+    found.sort(key=lambda x: x[0])
+    out: list[dict] = []
+    seen: set = set()
+    for _pos, name, inp in found:
+        key = (name, json.dumps(inp, sort_keys=True, default=str))
+        if key not in seen:
+            seen.add(key)
+            out.append({"name": name, "input": inp})
+    return out

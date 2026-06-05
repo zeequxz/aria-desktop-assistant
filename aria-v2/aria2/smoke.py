@@ -401,6 +401,38 @@ def run_smoke() -> int:
     check("wizard catalogue includes qwen3 + the recommended default ids",
           {"qwen3:4b", "qwen3:8b", "qwen3:14b", "llama3.2:1b"} <= _wiz_ids)
 
+    # Recover tool calls a local model wrote as TEXT (function-call syntax in
+    # code fences) instead of structured calls — the qwen3:4b "it printed the
+    # plan but nothing ran" bug. AST-based so nested quotes/multiline parse.
+    from aria2.models.ollama_provider import _extract_text_tool_calls
+    _llm = (
+        "First, create the file:\n```python\n"
+        'write_file(path="game.html", content="<button>Click</button>")\n'
+        "```\nThen start it:\n```python\n"
+        'run_shell(command="python -m http.server 8000")\n'
+        "```\nFinally:\n"
+        'notify_user(message="Game is up at http://localhost:8000")\n'
+    )
+    _tset = [
+        {"name": "write_file", "input_schema": {"properties": {"path": {}, "content": {}},
+                                                "required": ["path", "content"]}},
+        {"name": "run_shell", "input_schema": {"properties": {"command": {}},
+                                               "required": ["command"]}},
+        {"name": "notify_user", "input_schema": {"properties": {"message": {}},
+                                                 "required": ["message"]}},
+    ]
+    _rec = _extract_text_tool_calls(_llm, _tset)
+    check("recovers text-written tool calls (in order) from a local model",
+          [c["name"] for c in _rec] == ["write_file", "run_shell", "notify_user"]
+          and _rec[0]["input"]["path"] == "game.html"
+          and _rec[1]["input"]["command"] == "python -m http.server 8000"
+          and _rec[2]["input"]["message"].startswith("Game is up"))
+    check("a lone positional arg maps to the tool's required field",
+          _extract_text_tool_calls('notify_user("hi there")', _tset)
+          == [{"name": "notify_user", "input": {"message": "hi there"}}])
+    check("a prose mention of a tool name is NOT treated as a call",
+          _extract_text_tool_calls("You can use write_file to save things.", _tset) == [])
+
     # Telegram allowlist gating (no network — uses handle_message directly).
     config.set_key("telegram_allowlist", ["123"])
     config.set_key("messaging_access", "chat_only")
