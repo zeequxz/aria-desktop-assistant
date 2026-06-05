@@ -12,10 +12,16 @@ common foot-guns today.
 
 from __future__ import annotations
 
+import os
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 MAX_OUTPUT = 20_000
+
+# Background (detached) processes launched via run_shell(background=True).
+_bg_procs: list = []  # (pid, Popen, log_path)
 
 
 def _exec(cmd, cwd: str | None, timeout: int, shell: bool) -> dict:
@@ -54,6 +60,56 @@ def run_command(
     shell: bool = True,
 ) -> dict:
     return _exec(command, cwd, timeout, shell)
+
+
+def run_command_background(command: str, cwd: str | None = None) -> dict:
+    """Launch a long-running command (e.g. a dev / HTTP server) WITHOUT waiting.
+
+    Returns immediately with the PID; stdout/stderr are redirected to a log file.
+    The process is tracked and terminated when ARIA exits (terminate_background),
+    so servers don't get orphaned and ports don't stay stuck."""
+    workdir = Path(cwd) if cwd else Path.cwd()
+    if not workdir.exists():
+        return {"error": f"Working directory does not exist: {workdir}"}
+    try:
+        log_path = Path(tempfile.gettempdir()) / f"aria_bg_{int(time.time() * 1000)}.log"
+        log = open(log_path, "w", encoding="utf-8", errors="replace")
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW (no console flash)
+        proc = subprocess.Popen(
+            command, shell=True, cwd=str(workdir),
+            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **kwargs,
+        )
+        log.close()  # the child holds its own dup of the fd
+        _bg_procs.append((proc.pid, proc, str(log_path)))
+        return {
+            "started": True, "background": True, "pid": proc.pid,
+            "log": str(log_path),
+            "note": "Launched in the background; keeps running until ARIA exits.",
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def terminate_background() -> int:
+    """Stop all tracked background processes (called on app shutdown). On Windows
+    it kills the whole process tree so a shell-spawned child (the actual server)
+    doesn't survive. Returns how many were still running."""
+    n = 0
+    for pid, proc, _log in _bg_procs:
+        try:
+            if proc.poll() is None:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                                   capture_output=True, timeout=10)
+                else:
+                    proc.terminate()
+                n += 1
+        except Exception:
+            pass
+    _bg_procs.clear()
+    return n
 
 
 def run_python(code: str, cwd: str | None = None, timeout: int = 60) -> dict:

@@ -506,6 +506,11 @@ class ARIAApp(ctk.CTk):
         from aria2.services import ollama_model_manager as _omm
         _omm.model_manager.stop()
         connector_service.shutdown_all()
+        try:  # stop any background servers started via run_shell(background=True)
+            from aria2.runtime.tools import sandbox as _sandbox
+            _sandbox.terminate_background()
+        except Exception:
+            pass
         self.destroy()
 
 

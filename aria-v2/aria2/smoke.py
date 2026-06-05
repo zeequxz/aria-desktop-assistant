@@ -652,6 +652,21 @@ def run_smoke() -> int:
     _eb.publish("x.y", {})
     check("bus unsubscribe stops further delivery", len(_hits) == 1)
 
+    # run_shell(background=True): launch a long-running process (e.g. a server)
+    # detached, non-blocking, then stop it on shutdown.
+    import os as _os2
+    from aria2.runtime.tools import sandbox as _sb
+    _bgcmd = "ping -n 10 127.0.0.1" if _os2.name == "nt" else "sleep 10"
+    _bg = _sb.run_command_background(_bgcmd)
+    check("run_shell background launch is non-blocking + returns a pid",
+          _bg.get("started") is True and isinstance(_bg.get("pid"), int))
+    check("terminate_background stops the running background process",
+          _sb.terminate_background() >= 1)
+    from aria2.runtime.tools.shell_tools import make_shell_tools
+    _shtools = {t.name: t for t in make_shell_tools(".")}
+    check("run_shell tool exposes a background option",
+          "background" in _shtools["run_shell"].input_schema.get("properties", {}))
+
     from aria2.runtime.tools import permissions as _perm
     _perm.set_approver(None)  # headless: no approver
     allowed_deny, _ = _perm.check("run_shell", {}, {"run_shell": "deny"}, "ask")
