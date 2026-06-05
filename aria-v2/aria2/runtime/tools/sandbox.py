@@ -18,18 +18,15 @@ from pathlib import Path
 MAX_OUTPUT = 20_000
 
 
-def run_command(
-    command: str,
-    cwd: str | None = None,
-    timeout: int = 60,
-    shell: bool = True,
-) -> dict:
+def _exec(cmd, cwd: str | None, timeout: int, shell: bool) -> dict:
+    """Run a command (str for shell, argv list for no-shell), capture + truncate
+    output, hard-timeout. Shared by run_command and run_python."""
     workdir = Path(cwd) if cwd else Path.cwd()
     if not workdir.exists():
         return {"error": f"Working directory does not exist: {workdir}"}
     try:
         proc = subprocess.run(
-            command,
+            cmd,
             shell=shell,
             cwd=str(workdir),
             capture_output=True,
@@ -50,16 +47,34 @@ def run_command(
         return {"error": str(e)}
 
 
+def run_command(
+    command: str,
+    cwd: str | None = None,
+    timeout: int = 60,
+    shell: bool = True,
+) -> dict:
+    return _exec(command, cwd, timeout, shell)
+
+
 def run_python(code: str, cwd: str | None = None, timeout: int = 60) -> dict:
-    """Run a Python snippet in a subprocess (never in-process)."""
+    """Run a Python snippet in a subprocess (never in-process).
+
+    The code is written to a temp file and executed by path rather than passed
+    via `python -c "<...>"`. That avoids fragile shell quoting — on Windows,
+    cmd.exe mangles `-c` payloads containing quotes/backslashes — so snippets run
+    correctly regardless of their contents. No shell is involved.
+    """
+    import os
     import sys
+    import tempfile
 
-    return run_command(
-        f'"{sys.executable}" -c {_quote(code)}', cwd=cwd, timeout=timeout, shell=True
-    )
-
-
-def _quote(code: str) -> str:
-    # Cross-platform-ish quoting for -c; rely on the shell, escape doublequotes.
-    escaped = code.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    fd, path = tempfile.mkstemp(suffix=".py", prefix="aria_py_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(code)
+        return _exec([sys.executable, path], cwd, timeout, shell=False)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass

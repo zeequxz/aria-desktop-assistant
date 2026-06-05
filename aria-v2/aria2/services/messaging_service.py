@@ -233,7 +233,21 @@ class TelegramBridge:
 
         threading.Thread(target=_work, daemon=True, name=f"tg-msg-{chat}").start()
 
+    def _drain_backlog(self):
+        """Skip messages queued while the bot was offline by confirming pending
+        updates (advancing the offset) without dispatching them. Prevents a
+        backlog from spawning a flood of stale agent runs on startup."""
+        try:
+            resp = self._api("getUpdates", offset=-1, timeout=0)
+            results = resp.json().get("result", [])
+            if results:
+                self._offset = results[-1]["update_id"] + 1
+        except Exception:
+            pass
+
     def _loop(self):
+        if config.get("telegram_drain_backlog", True):
+            self._drain_backlog()
         while self._running:
             try:
                 resp = self._api("getUpdates", offset=self._offset, timeout=50)

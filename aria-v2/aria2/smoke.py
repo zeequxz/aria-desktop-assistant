@@ -552,6 +552,15 @@ def run_smoke() -> int:
     check("file write rejects path traversal outside the project folder",
           "error" in esc)
 
+    # run_python executes via a temp file (no shell), so code containing quotes
+    # and backslashes runs correctly — the old `python -c "<...>"` path mangled
+    # these on Windows cmd.exe.
+    from aria2.runtime.tools import sandbox as _sandbox
+    _pyres = _sandbox.run_python('print("quotes \\" and back\\\\slash")')
+    check("run_python runs snippets with quotes/backslashes correctly",
+          _pyres.get("exit_code") == 0
+          and 'quotes " and back\\slash' in _pyres.get("stdout", ""))
+
     from aria2.runtime.tools import permissions as _perm
     _perm.set_approver(None)  # headless: no approver
     allowed_deny, _ = _perm.check("run_shell", {}, {"run_shell": "deny"}, "ask")

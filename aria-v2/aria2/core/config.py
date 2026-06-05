@@ -163,6 +163,10 @@ DEFAULTS: dict = {
     # retry the turn transparently with the configured cloud provider so the user
     # still gets a reply (graceful degradation). Only applies when provider=local.
     "messaging_fallback_to_cloud": True,
+    # On startup, skip Telegram messages that queued while the bot was offline,
+    # so a backlog can't trigger a flood of stale agent runs. Set False to
+    # process the backlog (the older behaviour).
+    "telegram_drain_backlog": True,
     # Discord output: a default webhook + named channel webhooks for topic routing.
     "discord_webhook_url": "",
     "discord_channels": [],            # [{"name": ..., "url": ...}]
