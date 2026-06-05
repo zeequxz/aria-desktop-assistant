@@ -27,11 +27,14 @@ class _Toast(ctk.CTkToplevel):
                  y_offset: int, on_done):
         super().__init__(parent)
         self._on_done = on_done
+        fg, bg = _COLOURS.get(kind, _COLOURS["info"])
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.configure(fg_color="transparent")
+        # Solid background matching the card. fg_color="transparent" left the
+        # rounded-corner cut-outs rendering as a BLACK BOX — a Windows toplevel
+        # has no real transparency without -transparentcolor.
+        self.configure(fg_color=bg)
 
-        fg, bg = _COLOURS.get(kind, _COLOURS["info"])
         icon = _ICONS.get(kind, "✦")
 
         card = ctk.CTkFrame(self, fg_color=bg, corner_radius=10,
@@ -80,8 +83,35 @@ class ToastManager:
     def __init__(self, root):
         self._root = root
         self._active: list[_Toast] = []
+        # Dismiss floating toasts when the app is minimized. An overrideredirect +
+        # topmost toast ignores the window manager, so it would otherwise keep
+        # hovering over the desktop / other apps after you minimize ARIA.
+        try:
+            root.bind("<Unmap>", self._on_root_minimize, add="+")
+        except Exception:
+            pass
+
+    def _minimized(self) -> bool:
+        try:
+            return self._root.state() in ("iconic", "withdrawn")
+        except Exception:
+            return False
+
+    def _on_root_minimize(self, _event=None):
+        # <Unmap> also fires for child view-switches; only act on a real minimize.
+        if not self._minimized():
+            return
+        for t in list(self._active):
+            try:
+                t.destroy()
+            except Exception:
+                pass
+        self._active.clear()
 
     def show(self, message: str, kind: str = "info", duration: int = 3000):
+        # Don't float a toast over the desktop while the app is minimized/hidden.
+        if self._minimized():
+            return
         # Calculate vertical offset so toasts stack.
         offset = sum(t.winfo_reqheight() + 8 for t in self._active
                      if t.winfo_exists())
