@@ -367,6 +367,14 @@ def run_smoke() -> int:
           ollama_tool_support("llama3.2:3b") is False
           and ollama_tool_support("llama3.2:1b") is False
           and ollama_tool_support("llama3.1:8b") is True)
+    check("qwen3 4b+ are tool-capable; tiny qwen3 1.7b is not",
+          ollama_tool_support("qwen3:4b") is True
+          and ollama_tool_support("qwen3:8b") is True
+          and ollama_tool_support("qwen3:1.7b") is False)
+    from aria2.ui.views.local_ai_wizard import _MODELS as _WIZ_MODELS
+    _wiz_ids = {m[0] for m in _WIZ_MODELS}
+    check("wizard catalogue includes qwen3 + the recommended default ids",
+          {"qwen3:4b", "qwen3:8b", "qwen3:14b", "llama3.2:1b"} <= _wiz_ids)
 
     # Telegram allowlist gating (no network — uses handle_message directly).
     config.set_key("telegram_allowlist", ["123"])

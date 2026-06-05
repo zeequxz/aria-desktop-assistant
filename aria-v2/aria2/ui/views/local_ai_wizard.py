@@ -36,6 +36,21 @@ _MODELS = [
      "Best quality-to-speed balance. Recommended for 16 GB RAM systems."),
     ("qwen2.5:7b",     "Qwen 2.5 · 7B",     5.0, "◐ Medium",    "★★★★",
      "Excellent for code and multilingual tasks. Strong reasoning."),
+    ("qwen3:4b",       "Qwen 3 · 4B",       3.3, "⚡ Fast",      "★★★★",
+     "New-generation Qwen — strong reasoning with reliable tool calling. "
+     "A superb small all-rounder; great on 8 GB RAM."),
+    ("qwen3:8b",       "Qwen 3 · 8B",       5.2, "◐ Medium",    "★★★★",
+     "Excellent quality-to-size balance with native tool use. Recommended for 16 GB RAM."),
+    ("qwen3:14b",      "Qwen 3 · 14B",      9.3, "◐ Medium",    "★★★★★",
+     "Top-tier open reasoning + tool calling under 16 GB. Needs 16 GB RAM."),
+    ("gemma3:4b",      "Gemma 3 · 4B",      3.3, "⚡ Fast",      "★★★★",
+     "Google's latest compact model — strong chat and vision. "
+     "Tool calling is limited; best for conversation."),
+    ("phi4",           "Phi-4 · 14B",       9.1, "◐ Medium",    "★★★★★",
+     "Microsoft's flagship small model — excellent reasoning and tool calling. "
+     "Needs 16 GB RAM."),
+    ("qwen2.5-coder:7b", "Qwen2.5 Coder · 7B", 4.7, "◐ Medium", "★★★★",
+     "Specialised for code — the best local pick for writing and reviewing code."),
     ("mistral:7b",     "Mistral · 7B",       5.0, "◐ Medium",    "★★★★",
      "Great general-purpose model, strong instruction following."),
     ("deepseek-r1:7b", "DeepSeek R1 · 7B",  5.0, "◐ Medium",    "★★★★",
@@ -161,15 +176,16 @@ class LocalAIWizard(ctk.CTkToplevel):
 
     def _recommend_model(self) -> str:
         ram = self._ram
-        # On GPU, we can run larger models comfortably
+        # Prefer modern, tool-capable models. The small llama3.2 (1b/3b) models
+        # are chat-only (see model_caps), so we no longer recommend 3b by default.
         if getattr(self, "_has_gpu", False):
             if ram <= 0 or ram >= 8:
-                return "llama3.1:8b"
-            return "llama3.2:3b"
+                return "qwen3:8b"
+            return "qwen3:4b"
         if ram <= 0 or ram >= 16:
-            return "llama3.1:8b"
+            return "qwen3:8b"
         if ram >= 8:
-            return "llama3.2:3b"
+            return "qwen3:4b"
         return "llama3.2:1b"
 
     def _render(self):

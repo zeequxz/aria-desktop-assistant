@@ -24,6 +24,7 @@ _TOOL_CAPABLE = {
     # a reply. Keeping tools off lets them converse cleanly. For reliable local
     # tool calling use llama3.1:8b (or qwen2.5:7b).
     "qwen2.5:7b", "qwen2.5:14b", "qwen2.5:32b", "qwen2.5:72b",
+    "qwen3:4b", "qwen3:8b", "qwen3:14b", "qwen3:30b", "qwen3:32b",  # strong tool use
     "mistral:7b", "mistral:latest", "mistral-nemo",
     "mixtral",
     "phi4",
@@ -45,6 +46,7 @@ _TOOL_INCAPABLE_OVERRIDES = {
     "gemma2:9b",     # gemma2 has weak tool support
     "gemma:2b",
     "tinyllama",
+    "qwen3:0.6b", "qwen3:1.7b",   # tiny qwen3 over-trigger like other sub-2B models
 }
 
 
