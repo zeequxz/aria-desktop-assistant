@@ -48,6 +48,11 @@ class _Tooltip:
                 pass
             self._after = None
 
+    def update_text(self, text: str):
+        """Update tooltip text without rebinding — use this instead of calling
+        add_tooltip() again, which would stack bindings."""
+        self.text = text
+
     def _hide(self, _=None):
         self._cancel()
         if self._tip:

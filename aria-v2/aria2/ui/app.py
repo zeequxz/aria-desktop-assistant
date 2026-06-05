@@ -115,6 +115,8 @@ class ARIAApp(ctk.CTk):
         messaging_service.discord_bridge.start()
         heartbeat_service.heartbeat.start()
         tray_service.tray.start(self)
+        from aria2.services import ollama_model_manager as _omm
+        _omm.model_manager.start()   # manages all local models (load/unload/keep-alive)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.show("chat")
         if config.get("auto_check_updates", True):
@@ -381,6 +383,14 @@ class ARIAApp(ctk.CTk):
             if sv is not None and self._current is sv:
                 if not sv.confirm_leave():
                     return  # user chose Cancel — stay on Settings
+                # Force a full repaint after any dialog closed — prevents the
+                # "black box" phantom that appears when a Windows messagebox
+                # releases its grab and the CTk canvas hasn't repainted yet.
+                try:
+                    self.update_idletasks()
+                    self.update()
+                except Exception:
+                    pass
         for k, b in self._nav_buttons.items():
             if k == key:
                 b.configure(fg_color=theme.accent_soft(), text_color=theme.TEXT,
@@ -424,13 +434,56 @@ class ARIAApp(ctk.CTk):
         result = {"ok": False}
 
         def _ask():
+            # If the window is minimized, bring it to the front and flash
+            # so the user knows approval is waiting.
+            try:
+                state = self.wm_state()
+                if state in ("iconic", "withdrawn"):
+                    self.deiconify()
+                    self.lift()
+                    self.focus_force()
+                    # Flash the taskbar button
+                    try:
+                        import ctypes
+                        ctypes.windll.user32.FlashWindowEx  # check availability
+                        FLASHW_ALL, FLASHW_TIMERNOFG = 3, 12
+                        import ctypes.wintypes as wt
+                        class FLASHWINFO(ctypes.Structure):
+                            _fields_ = [("cbSize", wt.UINT), ("hwnd", wt.HANDLE),
+                                        ("dwFlags", wt.DWORD), ("uCount", wt.UINT),
+                                        ("dwTimeout", wt.DWORD)]
+                        fw = FLASHWINFO(ctypes.sizeof(FLASHWINFO),
+                                        self.winfo_id(), FLASHW_ALL | FLASHW_TIMERNOFG, 8, 0)
+                        ctypes.windll.user32.FlashWindowEx(ctypes.byref(fw))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             dlg = ToolApprovalDialog(self, tool_name, tool_input)
             self.wait_window(dlg)
             result["ok"] = dlg.approved
             done.set()
 
         self.after(0, _ask)
+
+        # After 10 minutes with no response, send a Telegram nudge so the
+        # user knows approval is waiting (e.g. they stepped away from the PC).
+        def _nudge():
+            if not done.is_set():
+                try:
+                    from aria2.services import messaging_service
+                    messaging_service.notify(
+                        f"⏳ ARIA is waiting for your approval to run: "
+                        f"{tool_name}\nOpen the app to approve or deny.")
+                except Exception:
+                    pass
+        import threading as _th
+        nudge_t = _th.Timer(600, _nudge)
+        nudge_t.daemon = True
+        nudge_t.start()
+
         done.wait(timeout=300)  # auto-deny after 5 min of no response
+        nudge_t.cancel()
         return result["ok"]
 
     def _on_close(self):
@@ -448,6 +501,8 @@ class ARIAApp(ctk.CTk):
         messaging_service.discord_bridge.stop()
         heartbeat_service.heartbeat.stop()
         tray_service.tray.stop()
+        from aria2.services import ollama_model_manager as _omm
+        _omm.model_manager.stop()
         connector_service.shutdown_all()
         self.destroy()
 

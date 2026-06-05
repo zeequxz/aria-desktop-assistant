@@ -61,6 +61,23 @@ def process_message(text: str, send=None, source: str = "telegram") -> dict:
         or agent_service.get("assistant")
     project = project_service.get(s.get("messaging_project", "general")) \
         or project_service.get("general")
+
+    # Per-messaging-source model override (separate from the global default).
+    # "local" forces Ollama; "cloud" forces the configured cloud provider;
+    # "default" inherits the global Settings provider.
+    mp = s.get("messaging_provider", "default")
+    model_overrides = agent_service.overrides_for(agent)
+    fallback = False
+    if mp == "local":
+        model_overrides = {**model_overrides, "provider": "local"}
+        # If the local model is down/unavailable, degrade gracefully to cloud so
+        # the user still gets a reply (the run engine retries transparently).
+        fallback = bool(s.get("messaging_fallback_to_cloud", True))
+    elif mp == "cloud":
+        # Remove any local override so the global cloud provider is used.
+        model_overrides = {k: v for k, v in model_overrides.items()
+                          if k != "provider"}
+
     engine = RunEngine(s)
     req = RunRequest(
         agent=agent, project=project,
@@ -69,7 +86,8 @@ def process_message(text: str, send=None, source: str = "telegram") -> dict:
         include_shell=True, include_computer=(level == "full"),
         policy_overrides=access_overrides(
             level, s.get("messaging_require_confirmation", True)),
-        overrides=agent_service.overrides_for(agent),
+        overrides=model_overrides,
+        fallback_to_cloud=fallback,
     )
     result = engine.execute(req)
     reply = result.text or f"(no reply — {result.status})"
@@ -168,26 +186,74 @@ class TelegramBridge:
         url = self.API.format(token=token, method=method)
         return requests.post(url, json=params, timeout=70)
 
+    @staticmethod
+    def _split(text: str, limit: int = 4096) -> list[str]:
+        """Split a reply into Telegram-sized chunks (hard cap 4096 chars),
+        preferring line boundaries so long answers aren't silently truncated."""
+        text = text or ""
+        if len(text) <= limit:
+            return [text] if text else []
+        chunks: list[str] = []
+        buf = ""
+        for line in text.splitlines(keepends=True):
+            while len(line) > limit:          # a single oversized line — hard-split
+                if buf:
+                    chunks.append(buf)
+                    buf = ""
+                chunks.append(line[:limit])
+                line = line[limit:]
+            if len(buf) + len(line) > limit:
+                chunks.append(buf)
+                buf = line
+            else:
+                buf += line
+        if buf:
+            chunks.append(buf)
+        return chunks
+
     def send_message(self, chat_id, text: str):
-        try:
-            # Telegram caps messages at 4096 chars.
-            self._api("sendMessage", chat_id=chat_id, text=text[:4000])
-        except Exception:
-            pass
+        for chunk in self._split(text, 4096):
+            try:
+                self._api("sendMessage", chat_id=chat_id, text=chunk)
+            except Exception:
+                pass
+
+    def _dispatch(self, text, chat):
+        """Acknowledge immediately and handle the message off the poll thread so
+        a slow agent run (a cold local model can take 30 s+) never blocks polling
+        for new messages."""
+        self.send_message(chat, "…working on it")
+
+        def _work():
+            try:
+                handle_message(text, chat,
+                               send=lambda r, c=chat: self.send_message(c, r))
+            except Exception as e:
+                self.send_message(chat, f"⚠ Error handling your message: {e}")
+
+        threading.Thread(target=_work, daemon=True, name=f"tg-msg-{chat}").start()
 
     def _loop(self):
         while self._running:
             try:
                 resp = self._api("getUpdates", offset=self._offset, timeout=50)
+                if resp.status_code != 200:
+                    time.sleep(5)            # 5xx/4xx from Telegram — back off
+                    continue
                 data = resp.json()
+                if not data.get("ok", False):
+                    # e.g. 409 Conflict (a second poller or a webhook is set) is
+                    # returned immediately; without a backoff this becomes a tight
+                    # loop hammering the API. Pause and retry.
+                    time.sleep(5)
+                    continue
                 for upd in data.get("result", []):
                     self._offset = upd["update_id"] + 1
                     msg = upd.get("message") or {}
                     text = msg.get("text")
                     chat = (msg.get("chat") or {}).get("id")
                     if text and chat is not None:
-                        self.send_message(chat, "…working on it")
-                        handle_message(text, chat, send=lambda r, c=chat: self.send_message(c, r))
+                        self._dispatch(text, chat)
             except requests.exceptions.RequestException:
                 time.sleep(5)  # network blip — back off and retry
             except Exception as e:
@@ -229,7 +295,10 @@ class DiscordBridge:
             if message.author == client.user:
                 return
             allow = [str(x) for x in config.get("discord_allowlist", [])]
-            if allow and str(message.author.id) not in allow:
+            # Fail closed: an empty allowlist means NOBODY is authorised, the same
+            # as the Telegram bridge. (Previously an empty list let *anyone* on the
+            # server command the bot — a privilege-escalation hole.)
+            if str(message.author.id) not in allow:
                 return
             import asyncio
 

@@ -17,7 +17,10 @@ def make_notify_tools() -> list[Tool]:
 
     return [
         Tool("notify_user",
-             "Send a short message to the user via Telegram (their phone).",
+             "Send a message to the user via Telegram. "
+             "Only call this when the user has explicitly asked to be notified on "
+             "Telegram (e.g. 'send me a Telegram', 'message me on Telegram', "
+             "'ask on Telegram'). Do not call it for routine replies.",
              {"type": "object", "properties": {"message": {"type": "string"}},
               "required": ["message"]},
              notify_user, default_policy="allow"),

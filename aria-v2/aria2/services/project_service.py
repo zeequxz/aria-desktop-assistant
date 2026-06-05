@@ -20,6 +20,12 @@ def set_pinned(project_id: str, pinned: bool) -> None:
     update(project_id, {"pinned": 1 if pinned else 0})
 
 
+def set_trust(project_id: str, level: str) -> None:
+    """Set the project trust level: ask | accept | auto | plan."""
+    allowed = {"ask", "accept", "auto", "plan"}
+    update(project_id, {"trust_level": level if level in allowed else "ask"})
+
+
 def counts(project_id: str) -> dict:
     """Cheap per-project tallies for the dashboard (chats / docs / automations)."""
     chats = db.one("SELECT COUNT(*) n FROM chats WHERE project_id=? AND archived=0",
@@ -48,7 +54,8 @@ def create(name: str, folder: str = "", goals: str = "") -> dict:
 
 def update(project_id: str, changes: dict) -> None:
     allowed = {k: v for k, v in changes.items()
-               if k in {"name", "folder", "goals", "archived", "pinned", "settings_json"}}
+               if k in {"name", "folder", "goals", "archived", "pinned",
+                        "trust_level", "settings_json"}}
     allowed["updated_at"] = now_ms()
     db.update("projects", project_id, allowed)
 

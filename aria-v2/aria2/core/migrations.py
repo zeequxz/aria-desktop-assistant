@@ -83,3 +83,11 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     # Projects can be pinned (like chats).
     _add_column(conn, "projects", "pinned", "INTEGER DEFAULT 0")
+
+    # Per-chat provider and execution mode overrides.
+    _add_column(conn, "chats", "provider_key", "TEXT DEFAULT ''")
+    _add_column(conn, "chats", "exec_mode",    "TEXT DEFAULT ''")
+    _add_column(conn, "chats", "chat_mode",    "TEXT DEFAULT ''")
+
+    # Project trust level (controls default tool permissions for all its chats).
+    _add_column(conn, "projects", "trust_level", "TEXT DEFAULT 'ask'")

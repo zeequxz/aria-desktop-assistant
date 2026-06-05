@@ -78,17 +78,19 @@ class ProjectsView(ctk.CTkFrame):
                                fg_color=theme.accent_soft() if active else "transparent",
                                corner_radius=6)
             row.pack(fill="x", padx=6, pady=1)
+            row.grid_columnconfigure(0, weight=1)
+            row.grid_columnconfigure(1, weight=0, minsize=28)
             label = ("📌 " if p["pinned"] else "") + ("🗄 " if p["archived"] else "🗂 ") + p["name"]
             btn = ctk.CTkButton(
                 row, text=label, anchor="w", height=34, corner_radius=6,
                 fg_color="transparent", hover_color=theme.HOVER,
                 text_color=theme.TEXT if active else theme.TEXT_DIM,
                 font=theme.f(-1), command=lambda i=p["id"]: self._select(i))
-            btn.pack(side="left", fill="x", expand=True)
-            ctk.CTkButton(row, text="⋯", width=24, height=30, fg_color="transparent",
+            btn.grid(row=0, column=0, sticky="ew")
+            ctk.CTkButton(row, text="⋯", width=28, height=30, fg_color="transparent",
                           hover_color=theme.HOVER, text_color=theme.TEXT_FAINT,
                           font=theme.f(0), command=lambda pp=p: self._project_menu(pp)
-                          ).pack(side="right", padx=(0, 2))
+                          ).grid(row=0, column=1, sticky="e")
             for wdg in (row, btn):
                 wdg.bind("<Button-3>", lambda e, pp=p: self._project_menu(pp, e))
 
@@ -128,6 +130,31 @@ class ProjectsView(ctk.CTkFrame):
         if p["folder"]:
             ctk.CTkLabel(self.counts_bar, text=f"📁 {p['folder']}", font=theme.f(-2),
                          text_color=theme.TEXT_FAINT).pack(side="left", padx=10)
+
+        # Trust level selector — sets the default mode for chats in this project.
+        trust_chip = ctk.CTkFrame(self.counts_bar, fg_color="transparent")
+        trust_chip.pack(side="right", padx=4)
+        ctk.CTkLabel(trust_chip, text="Trust:", font=theme.f(-2),
+                     text_color=theme.TEXT_FAINT).pack(side="left")
+        _TRUST = {"ask": "🙋 Ask", "accept": "✏️ Accept",
+                  "auto": "⚡ Auto", "plan": "📋 Plan"}
+        trust_menu = ctk.CTkOptionMenu(
+            trust_chip, values=list(_TRUST.values()), width=120, height=28,
+            fg_color=theme.SURFACE_2, button_color=theme.SURFACE_2,
+            font=theme.f(-1),
+            command=lambda lbl, pid=p["id"]: self._set_trust(pid, lbl))
+        cur = _TRUST.get(p.get("trust_level", "ask"), "🙋 Ask")
+        trust_menu.set(cur)
+        trust_menu.pack(side="left", padx=4)
+        w.add_tooltip(trust_menu,
+                      "Default mode for chats in this project.\n"
+                      "Ask: confirm all  ·  Accept: auto file edits  "
+                      "·  Auto: allow all  ·  Plan: plan only")
+
+    def _set_trust(self, project_id: str, label: str):
+        _REV = {"🙋 Ask": "ask", "✏️ Accept": "accept",
+                "⚡ Auto": "auto", "📋 Plan": "plan"}
+        project_service.set_trust(project_id, _REV.get(label, "ask"))
 
     def _goto(self, view: str):
         from aria2.core import config
@@ -249,7 +276,17 @@ class _ProjectEditDialog(ctk.CTkToplevel):
         btns = ctk.CTkFrame(self, fg_color="transparent")
         btns.pack(fill="x", padx=18, pady=14)
         w.primary_button(btns, "Save", self._save, width=100).pack(side="right")
-        w.ghost_button(btns, "Cancel", self.destroy, width=90).pack(side="right", padx=8)
+        w.ghost_button(btns, "Cancel", self._close, width=90).pack(side="right", padx=8)
+
+    def _close(self):
+        """Release the window grab before destroying to prevent the CTk black-box
+        phantom that appears on Windows when destroy() is called while a grab is held."""
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.withdraw()          # hide immediately so no black flash
+        self.after(10, self.destroy)
 
     def _browse(self):
         path = filedialog.askdirectory(parent=self)
@@ -263,5 +300,7 @@ class _ProjectEditDialog(ctk.CTkToplevel):
             "folder": self.folder_e.get().strip(),
             "goals": self.goals.get("1.0", "end").strip(),
         }
-        self.destroy()
-        self._on_save(data, self._pid)
+        on_save = self._on_save
+        pid = self._pid
+        self._close()
+        self.after(20, lambda: on_save(data, pid))

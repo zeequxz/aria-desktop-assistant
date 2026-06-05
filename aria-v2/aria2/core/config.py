@@ -53,6 +53,15 @@ DEFAULTS: dict = {
     "openai_oauth_scope": "",
     "ollama_model": "llama3",
     "ollama_url": "http://localhost:11434",
+    # Context window ARIA will pack for local/OpenAI-compatible models. Must not
+    # exceed the model's actual num_ctx in Ollama or Ollama silently truncates —
+    # tune to match your setup (raise for llama3.1/qwen2.5 large-context models).
+    "ollama_num_ctx": 8192,
+    # Tool-calling policy for local/OpenAI-compatible models:
+    #   "auto"   = detect per known model (safe default),
+    #   "always" = force-enable (e.g. vLLM/LM Studio serving a capable model),
+    #   "never"  = disable tools, converse only (most reliable on weak models).
+    "ollama_tool_mode": "auto",
     # Gemini (Google) — OpenAI-compatible endpoint; API key from AI Studio.
     "gemini_model": "gemini-2.0-flash",
     "gemini_api_key": "",
@@ -71,6 +80,7 @@ DEFAULTS: dict = {
     # hashing fallback — works with no key, lower quality).
     "embedding_provider": "local",
     "voyage_api_key": "",
+    "ollama_idle_unload_min": 10,   # unload idle local models after N minutes
     # ── Generation ─────────────────────────────────────────────────────────
     "max_tokens": 4096,
     "temperature": 1.0,
@@ -133,9 +143,18 @@ DEFAULTS: dict = {
     "messaging_access": "restricted",
     "messaging_project": "general",
     "messaging_agent": "assistant",
+    # Which AI model handles incoming Telegram/Discord messages.
+    # "default" = use the global provider from Settings.
+    # "local"   = always use Ollama (private, fast, offline).
+    # "cloud"   = always use the configured cloud provider (smarter).
+    "messaging_provider": "default",
     # When True, even "full" access routes shell + PC-control tools through the
     # host approval dialog (human-in-the-loop) rather than auto-allowing them.
     "messaging_require_confirmation": True,
+    # When a messaging run is pinned to the local model and it errors/unavailable,
+    # retry the turn transparently with the configured cloud provider so the user
+    # still gets a reply (graceful degradation). Only applies when provider=local.
+    "messaging_fallback_to_cloud": True,
     # Discord output: a default webhook + named channel webhooks for topic routing.
     "discord_webhook_url": "",
     "discord_channels": [],            # [{"name": ..., "url": ...}]

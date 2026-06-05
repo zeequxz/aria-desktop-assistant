@@ -79,9 +79,11 @@ class MessageBubble(ctk.CTkFrame):
                      font=theme.f(-2, "bold"),
                      text_color=theme.TEXT_DIM if self.is_user else theme.accent()
                      ).pack(side="left")
-        if when:
-            ctk.CTkLabel(head, text=when, font=theme.f(-2),
-                         text_color=theme.TEXT_FAINT).pack(side="left", padx=8)
+        # Always create the timestamp label (empty if no time yet) so
+        # set_timestamp() can find and update it on completion.
+        self._ts_label = ctk.CTkLabel(head, text=when or "", font=theme.f(-2),
+                                      text_color=theme.TEXT_FAINT)
+        self._ts_label.pack(side="left", padx=8)
         self._copy_btn = ctk.CTkButton(head, text="Copy", width=46, height=20,
                                        fg_color="transparent", hover_color=theme.HOVER,
                                        text_color=theme.TEXT_FAINT, font=theme.f(-2),
@@ -127,6 +129,15 @@ class MessageBubble(ctk.CTkFrame):
         self.text.configure(state="disabled")
         self._autosize()
 
+    def set_timestamp(self, ts_ms: int) -> None:
+        """Update the timestamp label — called when the response is complete."""
+        try:
+            from datetime import datetime
+            when = datetime.fromtimestamp(ts_ms / 1000).strftime("%H:%M")
+            self._ts_label.configure(text=when)
+        except Exception:
+            pass
+
     def set_note(self, text: str) -> None:
         """Replace body with a transient note (e.g. a tool-use indicator)."""
         self.text.configure(state="normal")
@@ -136,12 +147,31 @@ class MessageBubble(ctk.CTkFrame):
         self._autosize()
 
     def _autosize(self) -> None:
+        """Set the Text widget height to show ALL content with no scrollbar.
+
+        Uses dlineinfo on the last character for an accurate line count — more
+        reliable than count("displaylines") which misbehaves before first paint.
+        Falls back to counting newlines * 1.5 (approx for wrapped lines).
+        """
         self.text.update_idletasks()
         try:
-            n = self.text.count("1.0", "end-1c", "displaylines")[0]
+            # dlineinfo returns (x,y,w,h,baseline) of the line containing the index.
+            # We use "end-1c" for the very last character's line.
+            info = self.text.dlineinfo("end-1c")
+            if info:
+                # (y + h) is the pixel bottom of the last line.
+                # font metrics give us the single-line height.
+                fh = self.text.tk.call("font", "metrics",
+                                       self.text.cget("font"), "-linespace")
+                fh = max(int(fh), 14)
+                lines = max(1, (info[1] + info[3]) // fh + 1)
+                self.text.configure(height=lines)
+                return
         except Exception:
-            n = self._raw.count("\n") + 1
-        self.text.configure(height=max(1, n))
+            pass
+        # Fallback: count newlines + a factor for wrapped lines
+        n = max(2, self._raw.count("\n") + 2)
+        self.text.configure(height=n)
 
     def copy(self) -> None:
         try:

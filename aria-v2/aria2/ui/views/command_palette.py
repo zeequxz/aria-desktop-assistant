@@ -64,7 +64,7 @@ class CommandPalette(ctk.CTkToplevel):
         self.bind("<Down>", lambda e: self._move(1))
         self.bind("<Up>", lambda e: self._move(-1))
         self.bind("<Return>", lambda e: self._run())
-        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<Escape>", lambda e: self._close())
         self.entry.bind("<Down>", lambda e: self._move(1))
         self.entry.bind("<Up>", lambda e: self._move(-1))
         self.entry.bind("<Return>", lambda e: self._run())
@@ -107,12 +107,25 @@ class CommandPalette(ctk.CTkToplevel):
         self._sel = (self._sel + delta) % len(self._results)
         self._refresh()
 
+    def _close(self):
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.withdraw()
+        self.after(10, self.destroy)
+
     def _run(self):
         if not self._results:
             return
         cmd = self._results[self._sel]
-        self.destroy()
+        action = cmd["action"]
+        self._close()
+        self.after(15, lambda: self._exec(action))
+
+    @staticmethod
+    def _exec(action):
         try:
-            cmd["action"]()
+            action()
         except Exception as e:
             print(f"[Palette] {e}")

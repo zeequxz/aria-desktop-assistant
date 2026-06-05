@@ -114,7 +114,7 @@ class ChatView(ctk.CTkFrame):
         # Right: transcript + composer (inside the PanedWindow pane).
         right = ctk.CTkFrame(right_host, fg_color=theme.BG)
         right.pack(fill="both", expand=True)
-        right.grid_rowconfigure(1, weight=1)
+        right.grid_rowconfigure(2, weight=1)  # transcript expands
         right.grid_columnconfigure(0, weight=1)
 
         bar = ctk.CTkFrame(right, fg_color=theme.BG, height=48)
@@ -125,18 +125,77 @@ class ChatView(ctk.CTkFrame):
             button_hover_color=theme.BORDER, font=theme.f(-1), width=160,
         )
         self.agent_menu.pack(side="left")
+
+        # Per-chat provider override — overrides the global default for this session.
+        self._session_overrides: dict = {}
+        self._provider_labels = self._build_provider_labels()
+        self.provider_menu = ctk.CTkOptionMenu(
+            bar, values=self._provider_labels, command=self._on_provider_change,
+            fg_color=theme.SURFACE, button_color=theme.SURFACE_2,
+            button_hover_color=theme.BORDER, font=theme.f(-2), width=140,
+        )
+        self.provider_menu.pack(side="left", padx=(8, 0))
+        w.add_tooltip(self.provider_menu, "Provider for this session. Default uses Settings → Providers.")
+
+        # Local model picker — only shown when provider=Local
+        self._local_models: list[str] = []
+        self.local_model_menu = ctk.CTkOptionMenu(
+            bar, values=["loading…"], command=self._on_local_model_change,
+            fg_color=theme.SURFACE, button_color=theme.SURFACE_2,
+            button_hover_color=theme.BORDER, font=theme.f(-2), width=160,
+        )
+        # Initially hidden; shown when Local provider is active.
+        self._local_menu_visible = False
+
+        # Claude Code-style permission mode
+        _MODES = ["🙋 Ask", "✏️ Accept", "⚡ Auto", "📋 Plan"]
+        self.mode_menu = ctk.CTkOptionMenu(
+            bar, values=_MODES, fg_color=theme.SURFACE,
+            button_color=theme.SURFACE_2, button_hover_color=theme.BORDER,
+            font=theme.f(-1, "bold"), width=120,
+            command=self._on_mode_change,
+        )
+        self.mode_menu.set("🙋 Ask")
+        self.mode_menu.pack(side="left", padx=(8, 0))
+        w.add_tooltip(self.mode_menu,
+                      "Ask: confirm all actions  ·  Accept: auto-allow file edits  "
+                      "·  Auto: allow everything  ·  Plan: plan only, no execution")
+
+        # Execution routing — click to cycle: Default → Local only → Local+cloud fallback
+        self._routing_states = ["🔀", "🔒", "☁"]
+        self._routing_tips   = [
+            "🔀  Default — use the selected provider",
+            "🔒  Local only — always use Ollama (private, offline)",
+            "☁  Local + cloud fallback — try Ollama first, fall back to cloud if it fails",
+        ]
+        self._routing_idx = 0
+        self._routing_btn = ctk.CTkButton(
+            bar, text="🔀", width=36, height=30,
+            fg_color=theme.SURFACE, hover_color=theme.HOVER,
+            font=(theme.FONT, 14), command=self._cycle_routing,
+        )
+        self._routing_btn.pack(side="left", padx=(6, 0))
+        self._routing_tip = w.add_tooltip(self._routing_btn, self._routing_tips[0])
+
         w.ghost_button(bar, "⑂ Fork", self._fork, width=70, height=30,
                        tooltip="Branch this chat into a new conversation").pack(side="right")
 
+        # Tool-capability warning — hidden by default, shown for no-tool models.
+        self._tool_warn = ctk.CTkLabel(
+            right, text="", font=theme.f(-2), text_color=theme.WARN,
+            wraplength=700, justify="left", anchor="w")
+        self._tool_warn.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 2))
+        self._tool_warn.grid_remove()
+
         self.transcript = ctk.CTkScrollableFrame(right, fg_color=theme.BG)
-        self.transcript.grid(row=1, column=0, sticky="nsew", padx=8)
+        self.transcript.grid(row=2, column=0, sticky="nsew", padx=8)
 
         # Composer: a single thin rounded bar — icons + input + send all inline
         # on one row (Codex/Claude-Code style), so the field hugs the input.
         self._attachments: list[str] = []
         field = ctk.CTkFrame(right, fg_color=theme.SURFACE_2, corner_radius=14,
                              border_width=1, border_color=theme.BORDER)
-        field.grid(row=2, column=0, sticky="ew", padx=16, pady=(4, 14))
+        field.grid(row=3, column=0, sticky="ew", padx=16, pady=(4, 14))
         field.grid_columnconfigure(2, weight=1)  # the input column expands
 
         # Attachment chips span the top, collapsed when empty.
@@ -312,6 +371,10 @@ class ChatView(ctk.CTkFrame):
         agents = agent_service.list_agents()
         self._agents = {a["name"]: a["id"] for a in agents}
         self.agent_menu.configure(values=list(self._agents))
+        # Refresh provider labels in case settings changed.
+        if hasattr(self, "provider_menu"):
+            labels = self._build_provider_labels()
+            self.provider_menu.configure(values=labels)
 
         self._refresh_chat_list()
         if not self.chat_id:
@@ -344,18 +407,20 @@ class ChatView(ctk.CTkFrame):
                            fg_color=theme.accent_soft() if active else "transparent",
                            corner_radius=6)
         row.pack(fill="x", pady=1)
+        row.grid_columnconfigure(0, weight=1)
+        row.grid_columnconfigure(1, weight=0, minsize=28)
         btn = ctk.CTkButton(
             row, text=("📌 " if c["pinned"] else "") + (c["title"] or "Untitled"),
             anchor="w", height=32, corner_radius=6, fg_color="transparent",
             hover_color=theme.HOVER, text_color=theme.TEXT if active else theme.TEXT_DIM,
             font=theme.f(-1), command=lambda cid=c["id"]: self._open_chat(cid),
         )
-        btn.pack(side="left", fill="x", expand=True)
+        btn.grid(row=0, column=0, sticky="ew")
         menu_btn = ctk.CTkButton(
-            row, text="⋯", width=24, height=28, fg_color="transparent",
+            row, text="⋯", width=28, height=28, fg_color="transparent",
             hover_color=theme.HOVER, text_color=theme.TEXT_FAINT, font=theme.f(0),
-            command=lambda cc=c, b=None: self._chat_menu(cc))
-        menu_btn.pack(side="right", padx=(0, 2))
+            command=lambda cc=c: self._chat_menu(cc))
+        menu_btn.grid(row=0, column=1, sticky="e")
         # Right-click anywhere on the row also opens the menu.
         for wdg in (row, btn):
             wdg.bind("<Button-3>", lambda e, cc=c: self._chat_menu(cc, e))
@@ -435,6 +500,14 @@ class ChatView(ctk.CTkFrame):
     def _on_agent_change(self, name: str):
         if self.chat_id:
             chat_service.set_agent(self.chat_id, self._agents[name])
+        # Pre-load the model for this agent if it's a local model.
+        try:
+            from aria2.services import agent_service, ollama_model_manager as _omm
+            agent = agent_service.get(self._agents.get(name, "assistant"))
+            if agent and agent.get("provider") == "local" and agent.get("model"):
+                _omm.model_manager.ensure_model(agent["model"])
+        except Exception:
+            pass
 
     def _new_chat(self):
         agent_id = self._agents.get(self.agent_menu.get(), "assistant")
@@ -448,6 +521,39 @@ class ChatView(ctk.CTkFrame):
             name = next((n for n, i in self._agents.items() if i == chat["agent_id"]), None)
             if name:
                 self.agent_menu.set(name)
+        # Restore per-chat provider + mode.
+        if hasattr(self, "provider_menu") and hasattr(self, "mode_menu"):
+            pkey, rkey, mkey = chat_service.load_chat_settings(chat_id)
+            plabel = _provider_key_to_label(pkey, self._provider_labels)
+            # If no per-chat mode saved, inherit project's trust level.
+            if not mkey:
+                from aria2.services import project_service as _ps
+                proj = _ps.get(self.project_id)
+                mkey = (proj.get("trust_level") or "ask") if proj else "ask"
+            self.provider_menu.set(plabel)
+            self.mode_menu.set(_mode_key_to_label(mkey))
+            # Restore session overrides + local model if applicable.
+            specific_model = _provider_key_to_ollama_model(pkey)
+            if specific_model:
+                self._session_overrides = {"provider": "local",
+                                           "ollama_model": specific_model}
+            else:
+                self._session_overrides = self._provider_map.get(plabel, {})
+            self._update_local_model_menu(plabel)
+            # Set the local model picker to the stored model.
+            if specific_model and hasattr(self, "local_model_menu"):
+                self.after(200, lambda m=specific_model: (
+                    self.local_model_menu.set(m)
+                    if m in (self._local_models or [m]) else None))
+            # Restore routing button state.
+            ridx = _routing_key_to_idx(rkey)
+            self._routing_idx = ridx
+            if hasattr(self, "_routing_btn"):
+                self._routing_btn.configure(
+                    text=self._routing_states[ridx],
+                    fg_color=theme.accent_soft() if ridx else theme.SURFACE)
+                if hasattr(self, "_routing_tip"):
+                    self._routing_tip.update_text(self._routing_tips[ridx])
         self._refresh_chat_list()
         self._render_transcript()
 
@@ -487,10 +593,15 @@ class ChatView(ctk.CTkFrame):
         if not config.provider_configured():
             ctk.CTkLabel(wrap, text="Welcome to ARIA", font=theme.f(8, "bold"),
                          text_color=theme.TEXT).pack(pady=(8, 2))
-            ctk.CTkLabel(wrap, text="Add an AI provider key to start chatting.",
+            ctk.CTkLabel(wrap, text="Add an AI provider key or set up a local AI model.",
                          font=theme.f(0), text_color=theme.TEXT_DIM).pack()
-            w.primary_button(wrap, "Open Settings → Providers",
-                             lambda: self.app.show("settings"), height=38).pack(pady=12)
+            btn_row = ctk.CTkFrame(wrap, fg_color="transparent")
+            btn_row.pack(pady=12)
+            w.primary_button(btn_row, "🦙  Set up local AI (free, no key)",
+                             lambda: self._open_local_wizard(), height=40).pack(
+                side="left", padx=(0, 10))
+            w.ghost_button(btn_row, "Open Settings → Providers",
+                           lambda: self.app.show("settings"), height=40).pack(side="left")
         else:
             ctk.CTkLabel(wrap, text="Start the conversation",
                          font=theme.f(6, "bold"), text_color=theme.TEXT).pack(pady=(8, 2))
@@ -510,8 +621,20 @@ class ChatView(ctk.CTkFrame):
         b.pack(fill="x", padx=12, pady=4)
         if text:
             b.set_markdown(text)
-        self.transcript._parent_canvas.yview_moveto(1.0)
+        self._scroll_bottom()
         return b
+
+    def _scroll_bottom(self, delay: int = 0):
+        """Scroll the transcript to the bottom. Use delay>0 after layout changes."""
+        def _do():
+            try:
+                self.transcript._parent_canvas.yview_moveto(1.0)
+            except Exception:
+                pass
+        if delay:
+            self.after(delay, _do)
+        else:
+            _do()
 
     def _send(self):
         from pathlib import Path
@@ -537,11 +660,24 @@ class ChatView(ctk.CTkFrame):
             shown += "   · dry run"
         self._add_bubble("user", shown, ts=now_ms)
         self._stream_text = ""
-        self._stream_bubble = self._add_bubble("assistant", "", ts=now_ms)
-        self._stream_bubble.set_note("…")
+        self._steps_panel = None   # collapsible "Agent steps" panel
+        self._steps_list: list[str] = []
+        # Create bubble WITHOUT a timestamp — set on completion.
+        self._stream_bubble = self._add_bubble("assistant", "", ts=None)
+        self._stream_bubble.set_note("⏳  thinking…")
         self.send_btn.configure(text="Stop", command=self._stop)
+        mode_label = self.mode_menu.get() if hasattr(self, "mode_menu") else "🙋 Ask"
+        chat_mode  = _mode_label_to_key(mode_label)
+        ridx = getattr(self, "_routing_idx", 0)
+        local_only      = ridx == 1
+        cloud_fallback  = ridx == 2
+        overrides = dict(self._session_overrides)
+        if local_only:
+            overrides = {"provider": "local"}
         self.active_run = chat_service.send_async(
-            self.chat_id, text, dry_run=self._dry, attachments=attachments)
+            self.chat_id, text, dry_run=self._dry, attachments=attachments,
+            overrides=overrides, fallback_to_cloud=cloud_fallback,
+            chat_mode=chat_mode)
         self._attachments = []
         self._render_attachments()
 
@@ -552,10 +688,11 @@ class ChatView(ctk.CTkFrame):
     # ── Streaming events ──────────────────────────────────────────────────────────
 
     def _subscribe(self):
-        self._unsubs.append(self.app.on_event("run.token", self._on_token))
-        self._unsubs.append(self.app.on_event("run.tool", self._on_tool))
-        self._unsubs.append(self.app.on_event("run.done", self._on_done))
-        self._unsubs.append(self.app.on_event("run.error", self._on_error))
+        self._unsubs.append(self.app.on_event("run.token",      self._on_token))
+        self._unsubs.append(self.app.on_event("run.tool",       self._on_tool))
+        self._unsubs.append(self.app.on_event("run.done",       self._on_done))
+        self._unsubs.append(self.app.on_event("run.error",      self._on_error))
+        self._unsubs.append(self.app.on_event("run.clear_text", self._on_clear_text))
 
     def _on_token(self, payload):
         if payload.get("run_id") != self.active_run or not self._stream_bubble:
@@ -565,13 +702,40 @@ class ChatView(ctk.CTkFrame):
             self._stream_bubble.set_note("")
         self._stream_text += delta
         self._stream_bubble.append(delta)
-        self.transcript._parent_canvas.yview_moveto(1.0)
+        self._scroll_bottom()
 
     def _on_tool(self, payload):
         if payload.get("run_id") != self.active_run:
             return
-        if payload.get("phase") == "call" and self._stream_bubble:
-            self._stream_bubble.append(f"\n  ⚙ using {payload.get('name')}…\n")
+        phase = payload.get("phase")
+        name  = payload.get("name", "tool")
+        if phase == "call":
+            step = f"⚙  {name}"
+            self._steps_list.append(step)
+            self._update_steps_panel()
+            # Show a brief indicator on the main bubble too.
+            if self._stream_bubble and not self._stream_text:
+                self._stream_bubble.set_note(f"⏳  {name}…")
+        elif phase == "result":
+            # Mark last step as done.
+            if self._steps_list:
+                self._steps_list[-1] = self._steps_list[-1].replace("⚙", "✓")
+                self._update_steps_panel()
+
+    def _update_steps_panel(self):
+        """Render / update the collapsible agent-steps panel in the transcript."""
+        if not self._steps_list:
+            return
+        if self._steps_panel is None:
+            # Insert the steps panel BEFORE the streaming bubble.
+            self._steps_panel = _StepsPanel(self.transcript)
+            # Pack before the stream bubble so it appears above the response.
+            try:
+                self._steps_panel.pack(fill="x", padx=12, pady=(4, 0),
+                                       before=self._stream_bubble)
+            except Exception:
+                self._steps_panel.pack(fill="x", padx=12, pady=(4, 0))
+        self._steps_panel.update_steps(self._steps_list)
 
     def _on_done(self, payload):
         if payload.get("run_id") != self.active_run:
@@ -579,8 +743,12 @@ class ChatView(ctk.CTkFrame):
         run_id = self.active_run
         # Re-render the streamed text once with markdown formatting.
         if self._stream_bubble and self._stream_text:
+            # Stamp the response time now — when the answer actually arrived.
+            import time as _t
+            self._stream_bubble.set_timestamp(int(_t.time() * 1000))
             self._stream_bubble.set_markdown(self._stream_text)
         self._finish()
+        self._scroll_bottom(delay=80)  # after markdown re-render settles
         # The user + assistant bubbles were already rendered live during the
         # turn — no need to destroy and rebuild the whole transcript (that was
         # O(n) widgets per turn and caused flicker). Just refresh the sidebar.
@@ -657,6 +825,14 @@ class ChatView(ctk.CTkFrame):
         ctk.CTkLabel(panel, text="Discarded — nothing was changed.", font=theme.f(-1),
                      text_color=theme.TEXT_DIM).pack(anchor="w", padx=12, pady=8)
 
+    def _on_clear_text(self, payload):
+        """Local model wrote a tool call as text — clear it from the bubble."""
+        if payload.get("run_id") != self.active_run:
+            return
+        self._stream_text = ""
+        if self._stream_bubble:
+            self._stream_bubble.set_note("⏳  executing tool…")
+
     def _on_error(self, payload):
         if payload.get("run_id") != self.active_run:
             return
@@ -667,11 +843,217 @@ class ChatView(ctk.CTkFrame):
     def _finish(self):
         self.active_run = None
         self._stream_bubble = None
+        self._steps_panel = None
+        self._steps_list = []
         self.send_btn.configure(text="Send", command=self._send)
+
+    def _build_provider_labels(self) -> list[str]:
+        s = config.load()
+        labels = ["Default"]
+        _map = [
+            ("claude",  f"Claude · {s.get('claude_model','opus')[:10]}"),
+            ("openai",  f"OpenAI · {s.get('openai_model','gpt-4o')[:8]}"),
+            ("local",   f"Local · {s.get('ollama_model','llama3')[:12]}"),
+            ("grok",    f"Grok · {s.get('grok_model','grok-2')[:10]}"),
+            ("gemini",  f"Gemini · {s.get('gemini_model','flash')[:10]}"),
+        ]
+        for pid, label in _map:
+            labels.append(label)
+        self._provider_map = {"Default": {}}
+        for (pid, label), (_, _l) in zip(_map, _map):
+            self._provider_map[label] = {"provider": pid}
+        # rebuild map properly
+        self._provider_map = {"Default": {}}
+        for pid, label in _map:
+            self._provider_map[label] = {"provider": pid}
+        return labels
+
+    def _cycle_routing(self):
+        self._routing_idx = (self._routing_idx + 1) % 3
+        idx = self._routing_idx
+        symbol = self._routing_states[idx]
+        tip    = self._routing_tips[idx]
+        self._routing_btn.configure(
+            text=symbol,
+            # Colour the button when a non-default mode is active.
+            fg_color=theme.accent_soft() if idx else theme.SURFACE,
+        )
+        if hasattr(self, "_routing_tip"):
+            self._routing_tip.update_text(tip)
+        else:
+            self._routing_tip = w.add_tooltip(self._routing_btn, tip)
+        if self.chat_id:
+            chat_service.save_chat_settings(
+                self.chat_id,
+                _label_to_provider_key(self.provider_menu.get()),
+                _routing_idx_to_key(self._routing_idx),
+                _mode_label_to_key(self.mode_menu.get()))
+
+    def _show_tool_capability(self, model: str):
+        """Update the capability badge on the local model menu."""
+        if not hasattr(self, "local_model_menu"):
+            return
+        try:
+            from aria2.models.model_caps import ollama_tool_support
+            # Respect the global tool-mode override so the badge never contradicts
+            # the user's Settings choice (auto detects; always/never force it).
+            mode = config.get("ollama_tool_mode", "auto")
+            capable = (True if mode == "always"
+                       else False if mode == "never"
+                       else ollama_tool_support(model))
+            badge = " ✓" if capable else " ✗"
+            self.local_model_menu.configure(
+                text_color=theme.SUCCESS if capable else theme.WARN)
+            w.add_tooltip(self.local_model_menu,
+                          f"{'✓ Tool calling supported' if capable else '✗ Tool calling not supported — try llama3.1:8b'}")
+            if hasattr(self, "_tool_warn"):
+                if not capable:
+                    self._tool_warn.configure(
+                        text=f"⚠  {model} does not support tool calling. "
+                             "File creation, Telegram, and other tools will not work. "
+                             "Switch to llama3.1:8b for full functionality.",
+                        text_color=theme.WARN)
+                    self._tool_warn.grid()
+                else:
+                    self._tool_warn.grid_remove()
+        except Exception:
+            pass
+
+    def _on_local_model_change(self, model: str):
+        """When user picks a specific local model, update overrides + pre-load it."""
+        from aria2.core import config as _cfg
+        self._session_overrides = {"provider": "local",
+                                   "ollama_model": model}
+        self._show_tool_capability(model)
+        # Pre-load the chosen model in the background.
+        try:
+            from aria2.services import ollama_model_manager as _omm
+            s = _cfg.load()
+            _omm.model_manager.ensure_model(model)
+        except Exception:
+            pass
+        if self.chat_id:
+            chat_service.save_chat_settings(
+                self.chat_id,
+                f"local:{model}",
+                _routing_idx_to_key(self._routing_idx),
+                _mode_label_to_key(self.mode_menu.get()))
+
+    def _update_local_model_menu(self, label: str):
+        """Show/hide the local model picker based on the selected provider."""
+        is_local = "local" in label.lower() or label == "Default" and \
+            config.get("provider") == "local"
+        if is_local and not self._local_menu_visible:
+            self.local_model_menu.pack(side="left", padx=(4, 0),
+                                       before=self.mode_menu)
+            self._local_menu_visible = True
+            self._refresh_local_models()
+        elif not is_local and self._local_menu_visible:
+            self.local_model_menu.pack_forget()
+            self._local_menu_visible = False
+
+    def _refresh_local_models(self):
+        """Populate the local model picker from Ollama in a background thread."""
+        def worker():
+            try:
+                from aria2.services import ollama_model_manager as _omm
+                models = [m["name"] for m in _omm.model_manager.get_installed()]
+                if models:
+                    default = config.get("ollama_model", models[0])
+                    self.after(0, lambda: (
+                        self.local_model_menu.configure(values=models),
+                        self.local_model_menu.set(default),
+                        self._show_tool_capability(default)))
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_provider_change(self, label: str):
+        self._session_overrides = self._provider_map.get(label, {})
+        self._update_local_model_menu(label)
+        if self.chat_id:
+            chat_service.save_chat_settings(
+                self.chat_id,
+                _label_to_provider_key(label),
+                _routing_idx_to_key(self._routing_idx),
+                _mode_label_to_key(self.mode_menu.get()))
+
+    def _on_mode_change(self, _=None):
+        if self.chat_id:
+            chat_service.save_chat_settings(
+                self.chat_id,
+                _label_to_provider_key(self.provider_menu.get()),
+                _routing_idx_to_key(self._routing_idx),
+                _mode_label_to_key(self.mode_menu.get()))
+
+    def _open_local_wizard(self):
+        from aria2.ui.views.local_ai_wizard import open_wizard
+        open_wizard(self)
 
     def _explore(self):
         base = self.input.get("1.0", "end").strip()
         _ExploreDialog(self, self.project_id, base)
+
+
+class _StepsPanel(ctk.CTkFrame):
+    """Collapsible agent-steps panel shown above the response bubble.
+
+    Mirrors Claude Code's tool-use display: a toggle row showing 'N steps'
+    that expands to show each tool call with ⚙/✓ icons.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent, fg_color=theme.SURFACE, corner_radius=8,
+                         border_width=1, border_color=theme.BORDER)
+        self._expanded = False
+        self._steps: list[str] = []
+
+        self._header = ctk.CTkButton(
+            self, text="⏳  agent working…", anchor="w", height=28,
+            fg_color="transparent", hover_color=theme.HOVER,
+            text_color=theme.TEXT_DIM, font=theme.f(-1),
+            command=self._toggle)
+        self._header.pack(fill="x", padx=8)
+
+        self._body = ctk.CTkFrame(self, fg_color="transparent")
+        # Body starts hidden.
+
+    def update_steps(self, steps: list[str]):
+        self._steps = list(steps)
+        done = sum(1 for s in steps if s.startswith("✓"))
+        total = len(steps)
+        last = steps[-1] if steps else ""
+        if done == total and total > 0:
+            self._header.configure(
+                text=f"✓  {total} step{'s' if total > 1 else ''} completed  ▸",
+                text_color=theme.SUCCESS)
+        else:
+            self._header.configure(
+                text=f"⏳  {last}  ({done}/{total})  ▸",
+                text_color=theme.TEXT_DIM)
+        if self._expanded:
+            self._render_body()
+
+    def _toggle(self):
+        self._expanded = not self._expanded
+        if self._expanded:
+            self._body.pack(fill="x", padx=8, pady=(0, 6))
+            self._render_body()
+        else:
+            self._body.pack_forget()
+            for c in self._body.winfo_children():
+                c.destroy()
+
+    def _render_body(self):
+        for c in self._body.winfo_children():
+            c.destroy()
+        for step in self._steps:
+            row = ctk.CTkFrame(self._body, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            icon_color = theme.SUCCESS if step.startswith("✓") else theme.accent()
+            ctk.CTkLabel(row, text=step, font=theme.mono(-2),
+                         text_color=icon_color, anchor="w").pack(
+                anchor="w", padx=4)
 
 
 class _ExploreDialog(ctk.CTkToplevel):
@@ -782,6 +1164,60 @@ class _ExploreDialog(ctk.CTkToplevel):
         if self.run_ids:
             explore_service.discard_all(self.run_ids)  # clean up overlays
         self.destroy()
+
+
+def _label_to_provider_key(label: str) -> str:
+    """Map display label → stable storage key."""
+    if label == "Default":
+        return ""
+    prefix = label.split("·")[0].strip().lower()
+    return {"claude": "claude", "openai": "openai", "local": "local",
+            "grok": "grok", "gemini": "gemini"}.get(prefix, "")
+
+
+def _provider_key_to_label(key: str, labels: list[str]) -> str:
+    """Map stored key back to the current display label (best-effort).
+    Handles 'local:modelname' format from local model picker."""
+    if not key:
+        return "Default"
+    # Handle explicit local model selection: "local:qwen2.5-coder:3b"
+    if key.startswith("local:"):
+        for lbl in labels:
+            if lbl.split("·")[0].strip().lower() == "local":
+                return lbl
+        return "Default"
+    for lbl in labels:
+        if lbl.split("·")[0].strip().lower() == key.lower():
+            return lbl
+    return "Default"
+
+
+def _provider_key_to_ollama_model(key: str) -> str:
+    """If key is 'local:modelname', extract the model name."""
+    if key.startswith("local:"):
+        return key[6:]
+    return ""
+
+
+def _routing_idx_to_key(idx: int) -> str:
+    return {1: "local_only", 2: "cloud_fallback"}.get(idx, "")
+
+
+def _routing_key_to_idx(key: str) -> int:
+    return {"local_only": 1, "cloud_fallback": 2}.get(key, 0)
+
+
+def _mode_label_to_key(label: str) -> str:
+    """Display label → storage key (matches chat_service._MODE_POLICIES keys)."""
+    if "Accept" in label:  return "accept"
+    if "Auto"   in label:  return "auto"
+    if "Plan"   in label:  return "plan"
+    return "ask"           # default for Ask + anything unrecognised
+
+
+def _mode_key_to_label(key: str) -> str:
+    return {"accept": "✏️ Accept", "auto": "⚡ Auto",
+            "plan": "📋 Plan"}.get(key, "🙋 Ask")
 
 
 def _blocks_to_text(content) -> str:

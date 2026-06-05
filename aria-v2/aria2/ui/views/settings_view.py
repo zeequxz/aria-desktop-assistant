@@ -70,7 +70,14 @@ class SettingsView(ctk.CTkFrame):
         self._field(prov, "openai_api_key", "OpenAI API key", s, secret=True)
         self._field(prov, "openai_model", "OpenAI model", s)
         self._field(prov, "ollama_url", "Ollama URL", s)
-        self._field(prov, "ollama_model", "Ollama model", s)
+        self._field(prov, "ollama_model", "Ollama model (default, loaded on startup)", s)
+        self._field(prov, "ollama_idle_unload_min",
+                    "Unload local model after N minutes idle (0 = never)", s)
+        ctk.CTkButton(prov, text="🦙  Set up local AI (wizard for beginners)",
+                      height=36, fg_color=theme.SURFACE_2, hover_color=theme.HOVER,
+                      text_color=theme.TEXT, font=theme.f(-1),
+                      command=lambda: self._open_local_wizard()).pack(
+            fill="x", pady=(8, 0))
 
         # "Sign in with OpenAI" — real Codex PKCE flow, same as v1.
         # Uses the same public OAuth constants as the open-source Codex CLI;
@@ -215,7 +222,16 @@ class SettingsView(ctk.CTkFrame):
 
         # ── Messaging (Telegram) ────────────────────────────────────────────
         msg = self._section("Messaging (Telegram)", prov=m_tab)
-        self.messaging = ctk.CTkCheckBox(msg, text="Enable Telegram bridge", font=theme.f(-1))
+        tg_head = ctk.CTkFrame(msg, fg_color="transparent")
+        tg_head.pack(fill="x")
+        self.messaging = ctk.CTkCheckBox(tg_head, text="Enable Telegram bridge",
+                                         font=theme.f(-1))
+        self.messaging.pack(side="left", pady=6)
+        ctk.CTkButton(tg_head, text="ℹ  How to set up Telegram", width=200, height=28,
+                      fg_color=theme.SURFACE_2, hover_color=theme.HOVER,
+                      text_color=theme.TEXT_DIM, font=theme.f(-1),
+                      command=lambda: self._show_guide("telegram")).pack(
+            side="right", padx=(8, 0), pady=6)
         self.messaging.pack(anchor="w", pady=6)
         if s.get("messaging_enabled", False):
             self.messaging.select()
@@ -230,6 +246,26 @@ class SettingsView(ctk.CTkFrame):
             fg_color=theme.SURFACE_2, button_color=theme.SURFACE_2)
         self.msg_access.set(s.get("messaging_access", "restricted"))
         self.msg_access.pack(side="left", padx=8)
+
+        prow = ctk.CTkFrame(msg, fg_color="transparent")
+        prow.pack(fill="x", pady=6)
+        ctk.CTkLabel(prow, text="AI model for messages", font=theme.f(-1),
+                     text_color=theme.TEXT_DIM).pack(side="left")
+        self.msg_provider = ctk.CTkOptionMenu(
+            prow, values=["default", "local", "cloud"], width=140,
+            fg_color=theme.SURFACE_2, button_color=theme.SURFACE_2)
+        self.msg_provider.set(s.get("messaging_provider", "default"))
+        self.msg_provider.pack(side="left", padx=8)
+        ctk.CTkLabel(prow, text="default=Settings provider  local=Ollama  cloud=Claude/GPT/Grok",
+                     font=theme.f(-2), text_color=theme.TEXT_FAINT).pack(side="left", padx=6)
+
+        test_row = ctk.CTkFrame(msg, fg_color="transparent")
+        test_row.pack(fill="x", pady=4)
+        w.ghost_button(test_row, "🔔  Send test notification", self._test_telegram,
+                       width=200, height=30, tooltip="Send a test message to verify Telegram is working").pack(side="left")
+        self.tg_test_lbl = ctk.CTkLabel(test_row, text="", font=theme.f(-1),
+                                        text_color=theme.TEXT_DIM)
+        self.tg_test_lbl.pack(side="left", padx=10)
         ctk.CTkLabel(
             msg, text="full = shell + PC control · restricted = files/search only, "
                       "no PC control · chat_only = converse only",
@@ -243,6 +279,15 @@ class SettingsView(ctk.CTkFrame):
             self.msg_confirm.select()
 
         # Discord output channels.
+        dc_head = ctk.CTkFrame(msg, fg_color="transparent")
+        dc_head.pack(fill="x", pady=(8, 2))
+        ctk.CTkLabel(dc_head, text="Discord", font=theme.f(0, "bold"),
+                     text_color=theme.TEXT).pack(side="left")
+        ctk.CTkButton(dc_head, text="ℹ  How to set up Discord", width=200, height=28,
+                      fg_color=theme.SURFACE_2, hover_color=theme.HOVER,
+                      text_color=theme.TEXT_DIM, font=theme.f(-1),
+                      command=lambda: self._show_guide("discord")).pack(
+            side="right", padx=(8, 0))
         self._field(msg, "discord_webhook_url", "Discord default webhook URL", s, secret=True)
         ctk.CTkLabel(msg, text="Named Discord channels (one per line, name=webhook_url)",
                      font=theme.f(-1), text_color=theme.TEXT_DIM).pack(anchor="w", pady=(6, 2))
@@ -388,6 +433,36 @@ class SettingsView(ctk.CTkFrame):
             self._save()
         return True           # No — discard and leave
 
+    def _open_local_wizard(self):
+        from aria2.ui.views.local_ai_wizard import open_wizard
+        open_wizard(self)
+
+    def _test_telegram(self):
+        import threading
+        from aria2.services import messaging_service
+        self.tg_test_lbl.configure(text="Sending…", text_color=theme.TEXT_DIM)
+
+        def worker():
+            res = messaging_service.notify(
+                "✅ ARIA test notification — Telegram is connected and working!")
+            sent = res.get("sent", 0)
+            err = res.get("error", "")
+            if sent:
+                msg, color = f"✓ Sent to {sent} chat(s)", theme.SUCCESS
+            else:
+                msg = f"✗ Failed: {err or 'no chat IDs in allowlist'}"
+                color = theme.DANGER
+            self.after(0, lambda: self.tg_test_lbl.configure(text=msg, text_color=color))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_guide(self, which: str):
+        from aria2.ui.views.setup_guides import show_telegram_guide, show_discord_guide
+        if which == "telegram":
+            show_telegram_guide(self)
+        else:
+            show_discord_guide(self)
+
     def _refresh_openai_status(self):
         from aria2.services import openai_oauth_service as _oai
         if _oai.is_signed_in():
@@ -529,6 +604,7 @@ class SettingsView(ctk.CTkFrame):
         messaging_on = bool(self.messaging.get())
         s["messaging_enabled"] = messaging_on
         s["messaging_access"] = self.msg_access.get()
+        s["messaging_provider"] = self.msg_provider.get()
         s["messaging_require_confirmation"] = bool(self.msg_confirm.get())
         # Parse named Discord channels (name=url per line).
         channels = []
@@ -592,6 +668,12 @@ class SettingsView(ctk.CTkFrame):
             automation_service.webhook_server.start()
         else:
             automation_service.webhook_server.stop()
+        # Restart model manager if provider changed.
+        try:
+            from aria2.services import ollama_model_manager as _omm
+            _omm.model_manager.stop(); _omm.model_manager.start()
+        except Exception:
+            pass
         self.status.configure(text="")
         if hasattr(self, "app"):
             self.app.toast("Settings saved", "success")

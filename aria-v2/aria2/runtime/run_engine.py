@@ -91,6 +91,8 @@ class RunRequest:
     dry_run: bool = False            # speculative: route effects to an overlay
     include_computer: bool = False   # offer mouse/keyboard/screen tools
     policy_overrides: dict = field(default_factory=dict)  # per-run tool allow/ask/deny
+    fallback_to_cloud: bool = False  # retry with global cloud provider if local errors
+    plan_only: bool = False          # plan mode: no tools, agent only explains
 
 
 @dataclass
@@ -126,6 +128,30 @@ class RunEngine:
         if req.dry_run and run_id in _sandboxes:
             result.predicted_diff = _sandboxes[run_id].diff()
             self._record_step(run_id, 99999, "dryrun", output=result.predicted_diff)
+        # Cloud fallback: if the local run failed and fallback is enabled, retry
+        # transparently with the global cloud provider (no local override).
+        if (result.status == "failed" and req.fallback_to_cloud
+                and req.overrides.get("provider") == "local"):
+            bus.publish("run.token", {
+                "run_id": run_id,
+                "text": "\n\n*Local model unavailable — retrying with cloud provider…*\n\n",
+            })
+            cloud_req = RunRequest(
+                agent=req.agent, project=req.project, messages=req.messages,
+                kind=req.kind, chat_id=req.chat_id, run_id=new_id("run"),
+                overrides={},   # use global settings (cloud provider)
+                dry_run=req.dry_run, fallback_to_cloud=False,
+                # Preserve the security envelope + run parameters of the original
+                # request. Critical for messaging: a Telegram "restricted" session
+                # must keep its tool restrictions when it falls back to cloud.
+                include_shell=req.include_shell,
+                include_computer=req.include_computer,
+                policy_overrides=req.policy_overrides,
+                depth=req.depth, budget_usd=req.budget_usd,
+                trigger_id=req.trigger_id, parent_run_id=req.parent_run_id,
+                plan_only=req.plan_only,
+            )
+            result = RunEngine(self._settings).execute(cloud_req)
         self._maybe_self_improve(result)
         return result
 
@@ -233,10 +259,25 @@ class RunEngine:
         if "post_discord" in names:
             reach.append("post_discord (post to a Discord channel)")
         if reach:
+            channels = " and ".join(reach)
             system += (
-                f"\n\nYou can proactively reach the user: {', '.join(reach)}. "
-                "Use these to report finished work, surface alerts, or flag anything "
-                "time-sensitive — don't wait to be asked."
+                f"\n\nTool available: {channels}."
+                "\n\nIMPORTANT — how this works:"
+                "\n• notify_user() SENDS the message directly to the user's phone via"
+                " Telegram. ARIA handles the delivery. The user does NOT need to do"
+                " anything manually — do NOT tell them to post or tag anything."
+                "\n• ONLY call it when the user explicitly says something like:"
+                " 'send on Telegram', 'message me', 'Telegram me', 'notify me'."
+                "\n• Pass a plain string. Do NOT wrap in JSON or a dict."
+                "\n"
+                "\nCORRECT example — user says 'send a joke on Telegram':"
+                "\n  → CALL: notify_user(\"Why did the scarecrow win an award?"
+                " Because he was outstanding in his field!\")"
+                "\n"
+                "\nWRONG — do NOT do this:"
+                "\n  × Tell the user to post it themselves"
+                "\n  × Say 'tag @username on Telegram'"
+                "\n  × Reply with JSON like {\"message\": \"...\"}"
             )
         messages = compiled.messages
         bus.publish("run.context", {"run_id": run_id, "included": compiled.included,
@@ -264,7 +305,9 @@ class RunEngine:
             tool_calls: list[dict] = []
             usage = {}
             stop_reason = "end_turn"
-            tools_arg = toolset.schemas if caps.supports_tools else None
+            # Plan mode — no tools; agent explains without acting.
+            tools_arg = (None if req.plan_only or not caps.supports_tools
+                         else toolset.schemas)
 
             for ev in provider.stream(
                 model=model,
@@ -282,6 +325,11 @@ class RunEngine:
                     bus.publish("run.token", {"run_id": run_id, "text": ev.text})
                 elif ev.type == "tool_use":
                     tool_calls.append(ev.tool_call)
+                elif ev.type == "clear_text":
+                    # Local model wrote a tool call as text — discard it from
+                    # the visible stream so the JSON doesn't show in the chat.
+                    text_buf = ""
+                    bus.publish("run.clear_text", {"run_id": run_id})
                 elif ev.type == "usage":
                     usage = ev.usage
                 elif ev.type == "done":

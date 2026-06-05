@@ -106,6 +106,7 @@ class _DayDialog(ctk.CTkToplevel):
         self.configure(fg_color=theme.SURFACE)
         self.transient(parent)
         self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._close)
 
         ctk.CTkLabel(self, text=f"Tasks on {date_str}", font=theme.f(2, "bold"),
                      text_color=theme.TEXT).pack(anchor="w", padx=18, pady=(16, 4))
@@ -155,6 +156,14 @@ class _DayDialog(ctk.CTkToplevel):
             ctk.CTkLabel(self.existing, text=f"• {t['name']} ({t['kind']})",
                          font=theme.f(-1), text_color=theme.TEXT, anchor="w").pack(
                 anchor="w", padx=6, pady=2)
+
+    def _close(self):
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.withdraw()
+        self.after(10, self.destroy)
 
     def _schedule(self):
         name = self.name_e.get().strip()

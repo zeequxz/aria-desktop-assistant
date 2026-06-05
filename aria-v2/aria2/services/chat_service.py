@@ -86,6 +86,51 @@ def set_agent(chat_id: str, agent_id: str) -> None:
     db.update("chats", chat_id, {"agent_id": agent_id})
 
 
+_READ_TOOLS  = {"read_file", "list_dir", "search_knowledge", "recall", "remember",
+                "fetch_url", "web_search", "get_screen_size"}
+_WRITE_TOOLS = {"write_file"}
+_SHELL_TOOLS = {"run_shell", "run_python"}
+_ALL_TOOLS   = _READ_TOOLS | _WRITE_TOOLS | _SHELL_TOOLS
+
+_MODE_POLICIES: dict[str, dict[str, str]] = {
+    # Ask — confirm everything (default, like a fresh Claude Code project).
+    "ask":    {},
+    # Accept — auto-allow reads + writes, ask for shell (safe for known projects).
+    "accept": {**{t: "allow" for t in _READ_TOOLS | _WRITE_TOOLS},
+               **{t: "ask"   for t in _SHELL_TOOLS}},
+    # Auto — allow all tools in the project folder. Trust the model.
+    "auto":   {t: "allow" for t in _ALL_TOOLS},
+    # Plan — no tools at all; agent explains what it would do but doesn't act.
+    "plan":   {t: "deny"  for t in _ALL_TOOLS},
+}
+
+
+def mode_policy(mode: str) -> dict[str, str]:
+    """Return per-tool policy overrides for a chat/project mode."""
+    return dict(_MODE_POLICIES.get(mode or "ask", {}))
+
+
+def save_chat_settings(chat_id: str, provider_key: str, routing_key: str,
+                       chat_mode: str = "") -> None:
+    """Persist provider, routing (local/fallback), and permission mode per chat."""
+    db.update("chats", chat_id, {
+        "provider_key": provider_key or "",
+        "exec_mode":    routing_key or "",
+        "chat_mode":    chat_mode or "",
+    })
+
+
+def load_chat_settings(chat_id: str) -> tuple[str, str, str]:
+    """Return (provider_key, routing_key, chat_mode) for this chat."""
+    row = db.one(
+        "SELECT provider_key, exec_mode, chat_mode FROM chats WHERE id=?",
+        (chat_id,))
+    if not row:
+        return "", "", ""
+    return (row["provider_key"] or "", row["exec_mode"] or "",
+            row["chat_mode"] or "")
+
+
 def set_pinned(chat_id: str, pinned: bool) -> None:
     db.update("chats", chat_id, {"pinned": 1 if pinned else 0})
 
@@ -215,7 +260,8 @@ def build_user_content(text: str, attachments: list[str] | None = None) -> list[
 
 
 def send_async(chat_id: str, user_text: str, on_complete=None, dry_run: bool = False,
-               attachments: list[str] | None = None) -> str:
+               attachments: list[str] | None = None, overrides: dict | None = None,
+               fallback_to_cloud: bool = False, chat_mode: str = "") -> str:
     """Persist the user turn and run the agent on a background thread.
 
     Returns the run_id immediately. Token/tool/done events arrive on the bus
@@ -240,10 +286,32 @@ def send_async(chat_id: str, user_text: str, on_complete=None, dry_run: bool = F
     settings = config.load()
     engine = RunEngine(settings)
     run_id = new_id("run")
+    # Tell the model manager which model is in use so idle timers are correct.
+    try:
+        from aria2.services import ollama_model_manager as _omm
+        s = config.load()
+        effective_provider = (overrides or {}).get("provider") or s.get("provider")
+        if effective_provider == "local":
+            model = ((overrides or {}).get("ollama_model")
+                     or s.get("ollama_model", "llama3"))
+            _omm.model_manager.ping(model)
+    except Exception:
+        pass
+    agent_ov = agent_service.overrides_for(agent)
+    merged = {**agent_ov, **(overrides or {})}
+
+    # Determine effective mode: per-chat setting beats project trust level.
+    effective_mode = chat_mode or project.get("trust_level", "ask") or "ask"
+    policy_ov = mode_policy(effective_mode)
+    plan_only = effective_mode == "plan"
+
     req = RunRequest(
         agent=agent, project=project, messages=messages, kind="chat",
-        chat_id=chat_id, overrides=agent_service.overrides_for(agent),
+        chat_id=chat_id, overrides=merged,
         run_id=run_id, dry_run=dry_run,
+        fallback_to_cloud=fallback_to_cloud,
+        policy_overrides=policy_ov,
+        plan_only=plan_only,
     )
 
     def _worker():

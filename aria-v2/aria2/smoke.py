@@ -302,6 +302,10 @@ def run_smoke() -> int:
     upd = _check_update_via_server(update_service)
     check("update check reads a manifest and flags a newer version",
           upd and upd.get("version") == "99.0.0")
+    check("download_update refuses a non-http(s) URL scheme",
+          "error" in update_service.download_update("file:///etc/passwd"))
+    check("check_for_update ignores a non-http(s) manifest URL",
+          update_service.check_for_update("file:///tmp/manifest.json") is None)
 
     # ── Computer-use tools + access levels ────────────────────────────────────
     from aria2.runtime.tools.registry import build_toolset
@@ -331,6 +335,30 @@ def run_smoke() -> int:
           and restr.get("read_file") == "allow")
     check("chat_only denies all tools", all(v == "deny" for v in chat.values()))
 
+    # Telegram long-reply splitting: nothing is silently truncated (4096 cap).
+    long_reply = "\n".join(f"line {i} " + "x" * 50 for i in range(400))
+    parts = messaging_service.TelegramBridge._split(long_reply, 4096)
+    check("telegram splits long replies into <=4096-char chunks",
+          len(parts) > 1 and all(len(p) <= 4096 for p in parts)
+          and "".join(parts) == long_reply)
+    check("telegram short reply is a single chunk",
+          messaging_service.TelegramBridge._split("hi", 4096) == ["hi"])
+
+    # Ollama tool-mode override: force tools on/off regardless of model detection.
+    from aria2.models.ollama_provider import OllamaProvider
+    op = OllamaProvider("http://localhost:11434")
+    config.set_key("ollama_tool_mode", "always")
+    check("ollama_tool_mode=always force-enables tools on an unknown model",
+          op.capabilities("some-unknown-model:7b").supports_tools is True)
+    config.set_key("ollama_tool_mode", "never")
+    check("ollama_tool_mode=never disables tools even on a capable model",
+          op.capabilities("llama3.1:8b").supports_tools is False)
+    config.set_key("ollama_num_ctx", 32768)
+    check("ollama_num_ctx is honoured in capabilities",
+          op.capabilities("llama3.1:8b").context_window == 32768)
+    config.set_key("ollama_tool_mode", "auto")
+    config.set_key("ollama_num_ctx", 8192)
+
     # Telegram allowlist gating (no network — uses handle_message directly).
     config.set_key("telegram_allowlist", ["123"])
     config.set_key("messaging_access", "chat_only")
@@ -351,6 +379,31 @@ def run_smoke() -> int:
     buckets = automation_service.scheduled_in_month(yr, mo)
     check("calendar buckets the trigger on its day",
           once["id"] in [t["id"] for t in buckets.get(day, [])])
+
+    # Scheduler claim: a due schedule trigger must have next_run advanced BEFORE
+    # firing, so a slow run can't be re-fired on the next 30s tick (the duplicate
+    # concurrent-run bug). Recurring → advance; one-off → disable.
+    sch = automation_service.create("Claim test", "schedule", "noop",
+                                    project_id=p["id"], agent_id=a["id"],
+                                    config_obj={"interval": "hourly", "at": "00:30"})
+    db.update("triggers", sch["id"], {"next_run": now_ms() - 1000})  # force due
+    automation_service.scheduler._check_schedule()
+    claimed = automation_service.get(sch["id"])
+    check("scheduler advances next_run before firing (no duplicate fires)",
+          claimed["next_run"] is not None and claimed["next_run"] > now_ms())
+
+    once_t = automation_service.schedule_once(
+        "Once claim test", "noop",
+        (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
+        project_id=p["id"], agent_id=a["id"])
+    db.update("triggers", once_t["id"], {"enabled": 1, "next_run": now_ms() - 1000})
+    automation_service.scheduler._check_schedule()
+    once_after = automation_service.get(once_t["id"])
+    check("scheduler disables a one-off trigger when it claims it",
+          once_after["enabled"] == 0 and once_after["next_run"] is None)
+    automation_service.delete(sch["id"])
+    automation_service.delete(once_t["id"])
+
     config.set_key("telegram_allowlist", [])  # reset
 
     # ── Browser tools + outbound notify tool ──────────────────────────────────

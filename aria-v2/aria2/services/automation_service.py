@@ -100,21 +100,22 @@ def fire(trigger_id: str, context: str = "") -> str:
 
     def _worker():
         attempts = (t["max_retries"] or 0) + 1
+        final_run_id = req.run_id
         for i in range(attempts):
+            final_run_id = req.run_id
             result = engine.execute(req)
             if result.status == "done":
                 break
-            req.run_id = new_id("run")  # fresh run per retry
-            time.sleep(min(60, 2 ** i))
-        cfg = json.loads(t["config_json"])
-        next_run = _compute_next_run(t["kind"], cfg)
-        patch = {"last_fired": now_ms(), "last_run_id": run_id, "next_run": next_run}
-        # One-off calendar triggers disable themselves after firing.
-        if t["kind"] == "schedule" and cfg.get("interval") == "once":
-            patch["enabled"] = 0
-            patch["next_run"] = None
-        db.update("triggers", trigger_id, patch)
-        bus.publish("trigger.fired", {"trigger_id": trigger_id, "run_id": run_id})
+            if i < attempts - 1:
+                req.run_id = new_id("run")  # fresh run per retry
+                time.sleep(min(60, 2 ** i))
+        # NB: next_run advancement / one-off disabling is owned by the scheduler's
+        # claim step (see Scheduler._check_schedule), which advances next_run
+        # *before* dispatch so a long run can't be re-fired on the next tick.
+        # Here we only record the outcome (the final attempt's run id).
+        db.update("triggers", trigger_id,
+                  {"last_fired": now_ms(), "last_run_id": final_run_id})
+        bus.publish("trigger.fired", {"trigger_id": trigger_id, "run_id": final_run_id})
 
     threading.Thread(target=_worker, daemon=True, name=f"trigger-{trigger_id}").start()
     return run_id
@@ -248,10 +249,20 @@ class Scheduler:
     def _check_schedule(self):
         now = now_ms()
         due = db.all(
-            "SELECT id FROM triggers WHERE enabled=1 AND kind='schedule' "
+            "SELECT * FROM triggers WHERE enabled=1 AND kind='schedule' "
             "AND next_run IS NOT NULL AND next_run <= ?", (now,),
         )
         for r in due:
+            cfg = json.loads(r["config_json"] or "{}")
+            # Claim the trigger BEFORE dispatching: advance next_run (or disable a
+            # one-off) now. A run can take far longer than the 30s tick; without
+            # this the trigger stays "due" and is re-fired every tick, spawning
+            # duplicate concurrent runs of the same scheduled task.
+            if cfg.get("interval") == "once":
+                db.update("triggers", r["id"], {"enabled": 0, "next_run": None})
+            else:
+                db.update("triggers", r["id"],
+                          {"next_run": _compute_next_run("schedule", cfg)})
             fire(r["id"])
 
     def _check_files(self):
@@ -320,7 +331,13 @@ class WebhookServer:
                 self._fire()
 
         port = config.get("webhook_port", 8765)
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        try:
+            self._httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        except OSError as e:
+            # Port already in use / not bindable — don't let this crash app start.
+            print(f"[Webhook] could not bind 127.0.0.1:{port}: {e}")
+            self._httpd = None
+            return
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True,
                                         name="webhook-server")
         self._thread.start()
