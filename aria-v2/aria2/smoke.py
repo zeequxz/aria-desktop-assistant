@@ -77,11 +77,26 @@ def run_smoke() -> int:
 
     # Chat persistence + fork
     chat = chat_service.create_chat(p["id"], agent_id=a["id"])
-    chat_service._persist_message(chat["id"], "user", [{"type": "text", "text": "hello"}])
+    # Persisting a message publishes message.persisted (so the UI can attach the
+    # id to the live bubble for copy/fork/delete without a reload).
+    from aria2.core.events import bus as _evbus
+    _persisted = []
+    _u1 = _evbus.subscribe("message.persisted", lambda pl: _persisted.append(pl))
+    m_hello = chat_service._persist_message(chat["id"], "user", [{"type": "text", "text": "hello"}])
     chat_service._persist_message(chat["id"], "assistant", [{"type": "text", "text": "hi"}])
+    _u1()
+    check("message.persisted fires with id + role on each persisted message",
+          any(e.get("message_id") == m_hello and e.get("role") == "user"
+              for e in _persisted))
     forked = chat_service.fork(chat["id"])
     check("chat fork copies messages",
           len(chat_service.list_messages(forked["id"])) == 2)
+    # Fork up to a specific message: the branch stops at (and includes) it.
+    chat_service._persist_message(chat["id"], "user", [{"type": "text", "text": "third"}])
+    forked2 = chat_service.fork(chat["id"], up_to_message_id=m_hello)
+    _fm = chat_service.list_messages(forked2["id"])
+    check("fork up_to_message_id branches only up to that message",
+          len(_fm) == 1 and _fm[0]["content"][0]["text"] == "hello")
 
     # Trigger
     t = automation_service.create("Daily digest", "schedule", "Summarise the day.",

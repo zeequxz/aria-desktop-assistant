@@ -627,10 +627,27 @@ class ChatView(ctk.CTkFrame):
         b.pack(fill="x", padx=12, pady=4)
         if text:
             b.set_markdown(text)
-        if msg_id:  # persisted messages can be deleted
-            b.enable_delete(lambda mid=msg_id, bb=b: self._delete_message(mid, bb))
+        if msg_id:  # persisted messages get copy / fork / delete actions
+            self._wire_actions(b, msg_id)
         self._scroll_bottom()
         return b
+
+    def _wire_actions(self, bubble, msg_id: str):
+        """Attach fork + delete actions to a persisted message bubble (once)."""
+        if getattr(bubble, "_actions_wired", False):
+            return
+        bubble._actions_wired = True
+        bubble.enable_fork(lambda mid=msg_id: self._fork_from(mid))
+        bubble.enable_delete(lambda mid=msg_id, bb=bubble: self._delete_message(mid, bb))
+
+    def _fork_from(self, msg_id: str):
+        """Branch the conversation into a new chat containing everything up to and
+        including this message."""
+        if not self.chat_id:
+            return
+        new = chat_service.fork(self.chat_id, up_to_message_id=msg_id)
+        self.app.toast("Forked from this message", "success")
+        self._open_chat(new["id"])
 
     def _delete_message(self, msg_id: str, bubble):
         from tkinter import messagebox
@@ -643,6 +660,21 @@ class ChatView(ctk.CTkFrame):
             self.app.toast(res["error"], "error")
             return
         bubble.destroy()
+
+    def _on_message_persisted(self, payload):
+        """When a just-sent message is persisted, attach its id to the live bubble
+        so copy/fork/delete work immediately — no reload needed."""
+        if payload.get("chat_id") != self.chat_id:
+            return
+        mid = payload.get("message_id")
+        turn = getattr(self, "_turn_bubbles", None) or {}
+        bubble = turn.pop(payload.get("role"), None)
+        if mid and bubble is not None:
+            try:
+                if bubble.winfo_exists():
+                    self._wire_actions(bubble, mid)
+            except Exception:
+                pass
 
     def _scroll_bottom(self, delay: int = 0):
         """Scroll the transcript to the bottom. Use delay>0 after layout changes."""
@@ -690,12 +722,15 @@ class ChatView(ctk.CTkFrame):
                 f"📎 {Path(a).name}" for a in attachments)
         if self._dry:
             shown += "   · dry run"
-        self._add_bubble("user", shown, ts=now_ms)
+        user_bubble = self._add_bubble("user", shown, ts=now_ms)
         self._stream_text = ""
         self._steps_panel = None   # collapsible "Agent steps" panel
         self._steps_list: list[str] = []
         # Create bubble WITHOUT a timestamp — set on completion.
         self._stream_bubble = self._add_bubble("assistant", "", ts=None)
+        # Remember this turn's two bubbles so message.persisted can attach their
+        # ids (enabling copy/fork/delete on them without a transcript reload).
+        self._turn_bubbles = {"user": user_bubble, "assistant": self._stream_bubble}
         self._stream_bubble.set_note("⏳  thinking…")
         self.send_btn.configure(text="Stop", command=self._stop)
         mode_label = self.mode_menu.get() if hasattr(self, "mode_menu") else "🙋 Ask"
@@ -853,6 +888,8 @@ class ChatView(ctk.CTkFrame):
         self._unsubs.append(self.app.on_event("loop.result",    self._on_loop_result))
         self._unsubs.append(
             self.app.on_event("orchestration.chat", self._on_orchestration_chat))
+        self._unsubs.append(
+            self.app.on_event("message.persisted", self._on_message_persisted))
 
     def destroy(self):
         # Release bus subscriptions so a destroyed view (e.g. after a font-size

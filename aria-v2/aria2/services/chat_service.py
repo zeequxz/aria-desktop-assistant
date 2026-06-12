@@ -223,6 +223,10 @@ def _persist_message(chat_id, role, content, model=None, token_in=0, token_out=0
         "created_at": now_ms(),
     })
     db.update("chats", chat_id, {"updated_at": now_ms()})
+    # Let the UI attach this id to the live bubble it just rendered, so
+    # copy/fork/delete work on a just-sent message without a transcript reload.
+    bus.publish("message.persisted",
+                {"chat_id": chat_id, "message_id": mid, "role": role})
     return mid
 
 

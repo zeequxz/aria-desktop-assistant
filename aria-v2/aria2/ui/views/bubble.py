@@ -111,6 +111,14 @@ class MessageBubble(ctk.CTkFrame):
                                 spacing1=3, spacing3=2)
         self.text.configure(state="disabled")
 
+    def enable_fork(self, callback) -> None:
+        """Add a ⑂ Fork button: branch the conversation from this message."""
+        btn = ctk.CTkButton(self._head, text="⑂ Fork", width=54, height=20,
+                            fg_color="transparent", hover_color=theme.HOVER,
+                            text_color=theme.TEXT_FAINT, font=theme.f(-2),
+                            command=callback)
+        btn.pack(side="right", padx=(0, 2))
+
     def enable_delete(self, callback) -> None:
         """Add a ✕ button to the header that removes this message (callback runs
         the confirm + service delete). Only offered on persisted messages."""
