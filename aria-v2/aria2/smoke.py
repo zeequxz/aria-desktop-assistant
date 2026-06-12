@@ -1392,6 +1392,20 @@ def run_smoke() -> int:
     check("OpenAI translator drops image blocks from a tool result (text-only role)",
           _toolmsg["content"] == "saw screen")
 
+    # Non-Anthropic vision models get the screenshot as a follow-up user message;
+    # Anthropic (image-in-tool-result) and text-only models do not.
+    _imgout = {"path": "x.png", "_image": {"media_type": "image/png", "data": "QUJD"}}
+    _fu = _re._image_followup([_imgout],
+                              _Caps(supports_vision=True, supports_image_tool_results=False))
+    check("non-Anthropic vision model gets the screenshot as a follow-up user msg",
+          _fu and _fu["role"] == "user"
+          and any(b.get("type") == "image" and b["source"]["data"] == "QUJD"
+                  for b in _fu["content"]))
+    check("image-in-tool-result + text-only models get no image follow-up",
+          _re._image_followup([_imgout],
+                              _Caps(supports_vision=True, supports_image_tool_results=True)) is None
+          and _re._image_followup([_imgout], _Caps(supports_vision=False)) is None)
+
     # Local (Ollama) runs estimate token usage instead of always reporting 0.
     from aria2.models.ollama_provider import _estimate_input_tokens as _eit
     check("ollama input-token estimate counts system + message text (not 0)",

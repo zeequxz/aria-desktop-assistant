@@ -397,14 +397,21 @@ class RunEngine:
             # Execute tools, gathering results to feed back.
             messages.append({"role": "assistant", "content": turn_content})
             results_content = []
+            tool_outs = []
             for tc in tool_calls:
                 step_idx += 1
                 out = self._run_tool(run_id, step_idx, tc, toolset, agent_scopes, defaults)
+                tool_outs.append(out)
                 results_content.append(
                     {"type": "tool_result", "tool_use_id": tc["id"],
                      "content": _tool_result_content(out, caps)}
                 )
             messages.append({"role": "tool", "content": results_content})
+            # Non-Anthropic vision models (OpenAI/Gemini/compat) can't take an image
+            # inside a tool_result — deliver any screenshot as a follow-up user msg.
+            followup = _image_followup(tool_outs, caps)
+            if followup:
+                messages.append(followup)
 
             if cost_total > budget_usd:
                 self._finalise(run_id, "failed", error="budget exceeded", cost=cost_total, tokens=token_total)
@@ -542,10 +549,38 @@ def _tool_result_content(out, caps):
         ]
     if isinstance(out, dict) and "_image" in out:
         slim = {k: v for k, v in out.items() if k != "_image"}
-        slim["note"] = ("Screenshot saved to 'path'; this model can't view images "
-                        "in a tool result, so only the path is provided.")
+        # A vision-capable model gets the image as a follow-up user message
+        # (_image_followup); a text-only model just gets the path.
+        slim["note"] = ("Screenshot provided as an image in the next message."
+                        if getattr(caps, "supports_vision", False)
+                        else "Screenshot saved to 'path'; this model can't view "
+                             "images, so only the path is provided.")
         return json.dumps(slim, default=str)
     return json.dumps(out, default=str)
+
+
+def _image_followup(outs, caps):
+    """For models that support vision but NOT images inside a tool_result
+    (OpenAI / Gemini / OpenAI-compatible), deliver any screenshot from the tool
+    calls as a follow-up user message — so computer-use can SEE the screen on
+    non-Anthropic providers too. Returns the message, or None when not needed
+    (Anthropic already embeds it in the tool_result; text-only models can't use it)."""
+    if (getattr(caps, "supports_image_tool_results", False)
+            or not getattr(caps, "supports_vision", False)):
+        return None
+    blocks = []
+    for out in outs:
+        img = out.get("_image") if isinstance(out, dict) else None
+        if img and img.get("data"):
+            blocks.append({"type": "image", "source": {
+                "type": "base64",
+                "media_type": img.get("media_type", "image/png"),
+                "data": img["data"]}})
+    if not blocks:
+        return None
+    return {"role": "user",
+            "content": [{"type": "text",
+                         "text": "Screenshot(s) from the tool call above:"}] + blocks}
 
 
 def _last_user_text(messages: list[dict]) -> str:
