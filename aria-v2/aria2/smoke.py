@@ -135,6 +135,16 @@ def run_smoke() -> int:
     check("consolidate merges near-duplicate memories (keeps one)",
           _before == 2 and _merged == 1 and _after == 1)
 
+    # Transcript persistence keeps only text — a bare tool_use (from a turn stopped
+    # mid-tool-use) is dropped so it can't break the next turn's API request.
+    from aria2.services.chat_service import _visible_assistant_content as _vac
+    check("persisted assistant content strips dangling tool_use blocks",
+          _vac([{"type": "text", "text": "partial"},
+                {"type": "tool_use", "id": "t", "name": "x", "input": {}}])
+          == [{"type": "text", "text": "partial"}]
+          and _vac([{"type": "tool_use", "id": "t", "name": "x", "input": {}}]) == []
+          and _vac(None) == [])
+
     # Knowledge ingest + search
     knowledge_service.ingest_text(p["id"], "arch.md",
                                   "The run engine streams tokens over an event bus "

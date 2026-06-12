@@ -230,6 +230,16 @@ def _persist_message(chat_id, role, content, model=None, token_in=0, token_out=0
     return mid
 
 
+def _visible_assistant_content(content) -> list[dict]:
+    """The chat transcript stores only displayable text blocks — never tool_use
+    (run-internal; surfaced live via run.tool events). Dropping tool_use also keeps
+    the persisted history valid: a dangling tool_use with no tool_result would make
+    the next API request fail."""
+    if not isinstance(content, list):
+        return []
+    return [b for b in content if isinstance(b, dict) and b.get("type") == "text"]
+
+
 def _history_for_engine(chat_id: str) -> list[dict]:
     """Messages in neutral format for the run engine (drop ids/metadata)."""
     return [{"role": m["role"], "content": m["content"]} for m in list_messages(chat_id)]
@@ -333,9 +343,14 @@ def send_async(chat_id: str, user_text: str, on_complete=None, dry_run: bool = F
 
     def _worker():
         result: RunResult = engine.execute(req)
-        if result.assistant_content:
+        # Persist only the visible text to the transcript — never a bare tool_use.
+        # A turn stopped mid-tool-use (cancel / max-iterations / budget) returns a
+        # tool_use block with no matching tool_result; persisting it would make the
+        # NEXT turn's request invalid (tool_use without tool_result).
+        visible = _visible_assistant_content(result.assistant_content)
+        if visible:
             _persist_message(
-                chat_id, "assistant", result.assistant_content,
+                chat_id, "assistant", visible,
                 model=settings.get(f"{settings.get('provider')}_model"),
                 cost=result.cost_usd,
             )
