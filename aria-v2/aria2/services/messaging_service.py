@@ -30,22 +30,23 @@ _SAFE = ["read_file", "list_dir", "search_knowledge", "recall", "remember"]
 _WRITE = ["write_file", "edit_file"]
 _SHELL = ["run_shell", "run_python"]
 
-# In-memory per-chat history so the Telegram bot is conversational (follow-ups
-# keep context) instead of treating each message as isolated. Bounded to the last
-# few turns; reset on app restart (good enough for a remote-control bridge).
-_TG_HISTORY: dict[str, list[dict]] = {}
-_TG_MAX_TURNS = 6
+# In-memory per-conversation history so the Telegram + Discord bridges are
+# conversational (follow-ups keep context) instead of treating each message as
+# isolated. Keyed per chat/channel; bounded to the last few turns; reset on app
+# restart (good enough for a remote-control bridge).
+_DM_HISTORY: dict[str, list[dict]] = {}
+_DM_MAX_TURNS = 6
 
 
 def _remember_turn(chat_key: str, user_text: str, reply: str) -> None:
     """Append a user+assistant turn to a chat's history (text only — never a
     tool_use, which would dangle and break the next request), bounded to the last
-    _TG_MAX_TURNS turns."""
-    turns = _TG_HISTORY.get(chat_key, []) + [
+    _DM_MAX_TURNS turns."""
+    turns = _DM_HISTORY.get(chat_key, []) + [
         {"role": "user", "content": [{"type": "text", "text": user_text}]},
         {"role": "assistant", "content": [{"type": "text", "text": reply or ""}]},
     ]
-    _TG_HISTORY[chat_key] = turns[-(_TG_MAX_TURNS * 2):]
+    _DM_HISTORY[chat_key] = turns[-(_DM_MAX_TURNS * 2):]
 
 
 def access_overrides(level: str, require_confirmation: bool = True) -> dict:
@@ -131,7 +132,7 @@ def handle_message(text: str, chat_id, send=None) -> dict:
         return {"blocked": True, "reply": reply}
     key = str(chat_id)
     res = process_message(text, send=send, source="telegram",
-                          history=_TG_HISTORY.get(key, []))
+                          history=_DM_HISTORY.get(key, []))
     if not res.get("blocked"):
         _remember_turn(key, text, res.get("reply", ""))
     return res
@@ -343,10 +344,15 @@ class DiscordBridge:
                 return
             import asyncio
 
+            key = f"discord:{message.channel.id}"
+
             def _work():
-                return process_message(message.content, source="discord")
+                return process_message(message.content, source="discord",
+                                       history=_DM_HISTORY.get(key, []))
 
             result = await asyncio.to_thread(_work)
+            if not result.get("blocked"):
+                _remember_turn(key, message.content, result.get("reply", ""))
             try:
                 await message.channel.send(result.get("reply", "")[:1900])
             except Exception:

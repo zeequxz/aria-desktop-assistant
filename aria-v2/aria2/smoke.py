@@ -1406,15 +1406,15 @@ def run_smoke() -> int:
                               _Caps(supports_vision=True, supports_image_tool_results=True)) is None
           and _re._image_followup([_imgout], _Caps(supports_vision=False)) is None)
 
-    # Telegram bridge is now conversational: prior turns are threaded into the run,
-    # and per-chat history is bounded.
+    # Telegram + Discord bridges are now conversational: prior turns are threaded
+    # into the run, and per-conversation history is bounded.
     from aria2.services import messaging_service as _msg
-    _msg._TG_HISTORY.clear()
+    _msg._DM_HISTORY.clear()
     for _i in range(10):
         _msg._remember_turn("c1", f"q{_i}", f"a{_i}")
-    check("telegram per-chat history is bounded to the last N turns",
-          len(_msg._TG_HISTORY["c1"]) == _msg._TG_MAX_TURNS * 2
-          and _msg._TG_HISTORY["c1"][-1]["content"][0]["text"] == "a9")
+    check("messaging per-conversation history is bounded to the last N turns",
+          len(_msg._DM_HISTORY["c1"]) == _msg._DM_MAX_TURNS * 2
+          and _msg._DM_HISTORY["c1"][-1]["content"][0]["text"] == "a9")
 
     _seen_msgs = []
 
