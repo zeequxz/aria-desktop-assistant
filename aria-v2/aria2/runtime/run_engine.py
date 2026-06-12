@@ -370,6 +370,16 @@ class RunEngine:
                 )
             assistant_content = turn_content
 
+            # Cancelled mid-stream: stop honestly as 'cancelled' (not 'done'), but
+            # keep whatever text already streamed so the partial answer isn't lost.
+            # Without this, a Stop during the final turn fell through and finalised
+            # as 'done'.
+            if cancel_ev.is_set():
+                self._finalise(run_id, "cancelled", cost=cost_total, tokens=token_total)
+                bus.publish("run.status", {"run_id": run_id, "status": "cancelled"})
+                return RunResult(run_id, "cancelled", final_text, cost_total,
+                                 token_total, turn_content)
+
             if stop_reason != "tool_use" or not tool_calls:
                 self._finalise(run_id, "done", cost=cost_total, tokens=token_total)
                 bus.publish("run.done", {"run_id": run_id, "text": final_text})
@@ -382,7 +392,8 @@ class RunEngine:
                 step_idx += 1
                 out = self._run_tool(run_id, step_idx, tc, toolset, agent_scopes, defaults)
                 results_content.append(
-                    {"type": "tool_result", "tool_use_id": tc["id"], "content": json.dumps(out)}
+                    {"type": "tool_result", "tool_use_id": tc["id"],
+                     "content": json.dumps(out, default=str)}
                 )
             messages.append({"role": "tool", "content": results_content})
 
@@ -454,14 +465,16 @@ class RunEngine:
     def _record_step(self, run_id, idx, type_, tool_name=None, input_data=None,
                      output=None, token_in=0, token_out=0, duration_ms=0,
                      messages=None, system=None):
+        # default=str so a non-JSON-serialisable tool output (or message snapshot)
+        # degrades to its string form instead of crashing the whole run.
         snapshot = None
         if messages is not None:
-            snapshot = json.dumps({"system": system, "messages": messages})
+            snapshot = json.dumps({"system": system, "messages": messages}, default=str)
         step = {
             "id": new_id("step"), "run_id": run_id, "idx": idx, "type": type_,
             "tool_name": tool_name,
-            "input_json": json.dumps(input_data) if input_data is not None else None,
-            "output_json": json.dumps(output) if output is not None else None,
+            "input_json": json.dumps(input_data, default=str) if input_data is not None else None,
+            "output_json": json.dumps(output, default=str) if output is not None else None,
             "messages_json": snapshot,
             "token_in": token_in, "token_out": token_out,
             "duration_ms": duration_ms, "created_at": now_ms(),

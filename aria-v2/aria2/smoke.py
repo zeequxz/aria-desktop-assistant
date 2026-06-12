@@ -1144,6 +1144,51 @@ def run_smoke() -> int:
     finally:
         _orch._review, _oreg.for_settings = _orig_review4, _orig_reg4
 
+    # ── Run engine: honest cancellation + resilient step serialisation ────────
+    from aria2.runtime import run_engine as _re
+    from aria2.runtime.run_engine import RunEngine as _RE, RunRequest as _RReq
+    from aria2.models.base import Capabilities as _Caps, StreamEvent as _SEv
+    _crid = _nid("run")
+
+    class _CancelMidProv:
+        name = "fake"
+
+        def capabilities(self, m):
+            return _Caps(supports_tools=False, supports_caching=False)
+
+        def count_tokens(self, t):
+            return max(1, len(t) // 4)
+
+        def stream(self, model, system, messages, tools=None, max_tokens=4096,
+                   temperature=1.0, cache=True):
+            yield _SEv(type="text", text="partial answer")
+            _re._cancel[_crid].set()  # simulate the user pressing Stop mid-stream
+            yield _SEv(type="text", text=" (should be dropped)")
+            yield _SEv(type="usage", usage={"input": 2, "output": 2})
+            yield _SEv(type="done", stop_reason="end_turn")
+
+    _save_reg = _oreg.for_settings
+    _oreg.for_settings = lambda s, o=None: (_CancelMidProv(), "fake")
+    try:
+        _cres = _RE(_cfg3.load()).execute(_RReq(
+            agent=a, project=p,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            kind="chat", run_id=_crid))
+        check("cancelling mid-stream finalises as 'cancelled' (not 'done'), keeps text",
+              _cres.status == "cancelled" and "partial answer" in _cres.text
+              and _dbm.one("SELECT status FROM runs WHERE id=?",
+                           (_crid,))["status"] == "cancelled")
+        _ser_ok = True
+        try:
+            _RE(_cfg3.load())._record_step(_crid, 77, "tool", tool_name="x",
+                                           output={"weird": object()})
+        except Exception:
+            _ser_ok = False
+        check("run-step serialisation tolerates non-JSON tool output (default=str)",
+              _ser_ok is True)
+    finally:
+        _oreg.for_settings = _save_reg
+
     from aria2.core import db as _db
     bt = _db.one("PRAGMA busy_timeout")
     check("db busy_timeout is set", bt is not None and bt[0] >= 5000)
