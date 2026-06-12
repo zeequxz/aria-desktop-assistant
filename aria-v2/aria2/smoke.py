@@ -1406,6 +1406,45 @@ def run_smoke() -> int:
                               _Caps(supports_vision=True, supports_image_tool_results=True)) is None
           and _re._image_followup([_imgout], _Caps(supports_vision=False)) is None)
 
+    # Telegram bridge is now conversational: prior turns are threaded into the run,
+    # and per-chat history is bounded.
+    from aria2.services import messaging_service as _msg
+    _msg._TG_HISTORY.clear()
+    for _i in range(10):
+        _msg._remember_turn("c1", f"q{_i}", f"a{_i}")
+    check("telegram per-chat history is bounded to the last N turns",
+          len(_msg._TG_HISTORY["c1"]) == _msg._TG_MAX_TURNS * 2
+          and _msg._TG_HISTORY["c1"][-1]["content"][0]["text"] == "a9")
+
+    _seen_msgs = []
+
+    class _MsgProv:
+        name = "fake"
+
+        def capabilities(self, m):
+            return _Caps(supports_tools=False, supports_caching=False)
+
+        def count_tokens(self, t):
+            return max(1, len(t) // 4)
+
+        def stream(self, model, system, messages, tools=None, max_tokens=4096,
+                   temperature=1.0, cache=True):
+            _seen_msgs.append(messages)
+            yield _SEv(type="text", text="ack")
+            yield _SEv(type="usage", usage={"input": 1, "output": 1})
+            yield _SEv(type="done", stop_reason="end_turn")
+    _save_reg5 = _oreg.for_settings
+    _oreg.for_settings = lambda s, o=None: (_MsgProv(), "fake")
+    try:
+        _hist = [{"role": "user", "content": [{"type": "text", "text": "tell me about cats"}]},
+                 {"role": "assistant", "content": [{"type": "text", "text": "cats are great"}]}]
+        _msg.process_message("and dogs?", history=_hist)
+        _flat = _vjson.dumps(_seen_msgs[-1]) if _seen_msgs else ""
+        check("telegram process_message threads prior conversation history",
+              "tell me about cats" in _flat and "and dogs?" in _flat)
+    finally:
+        _oreg.for_settings = _save_reg5
+
     # Local (Ollama) runs estimate token usage instead of always reporting 0.
     from aria2.models.ollama_provider import _estimate_input_tokens as _eit
     check("ollama input-token estimate counts system + message text (not 0)",

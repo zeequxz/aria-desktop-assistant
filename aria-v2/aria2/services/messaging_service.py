@@ -30,6 +30,23 @@ _SAFE = ["read_file", "list_dir", "search_knowledge", "recall", "remember"]
 _WRITE = ["write_file", "edit_file"]
 _SHELL = ["run_shell", "run_python"]
 
+# In-memory per-chat history so the Telegram bot is conversational (follow-ups
+# keep context) instead of treating each message as isolated. Bounded to the last
+# few turns; reset on app restart (good enough for a remote-control bridge).
+_TG_HISTORY: dict[str, list[dict]] = {}
+_TG_MAX_TURNS = 6
+
+
+def _remember_turn(chat_key: str, user_text: str, reply: str) -> None:
+    """Append a user+assistant turn to a chat's history (text only — never a
+    tool_use, which would dangle and break the next request), bounded to the last
+    _TG_MAX_TURNS turns."""
+    turns = _TG_HISTORY.get(chat_key, []) + [
+        {"role": "user", "content": [{"type": "text", "text": user_text}]},
+        {"role": "assistant", "content": [{"type": "text", "text": reply or ""}]},
+    ]
+    _TG_HISTORY[chat_key] = turns[-(_TG_MAX_TURNS * 2):]
+
 
 def access_overrides(level: str, require_confirmation: bool = True) -> dict:
     """Map an access level to per-tool allow/deny overrides for a run.
@@ -48,10 +65,12 @@ def access_overrides(level: str, require_confirmation: bool = True) -> dict:
     return {t: "deny" for t in _SAFE + _WRITE + _SHELL + COMPUTER_TOOL_NAMES}
 
 
-def process_message(text: str, send=None, source: str = "telegram") -> dict:
+def process_message(text: str, send=None, source: str = "telegram",
+                    history: list | None = None) -> dict:
     """Run the agent on an authorised inbound message under the configured access
     level, reply via `send`, and return {reply, run_id}. (No allowlist check —
-    callers gate authorisation per channel.)"""
+    callers gate authorisation per channel.) `history` (prior turns) is prepended
+    so a conversation has context."""
     s = config.load()
     from aria2.runtime.run_engine import RunEngine, RunRequest
     from aria2.services import agent_service, project_service
@@ -79,9 +98,11 @@ def process_message(text: str, send=None, source: str = "telegram") -> dict:
                           if k != "provider"}
 
     engine = RunEngine(s)
+    messages = list(history or []) + [
+        {"role": "user", "content": [{"type": "text", "text": text}]}]
     req = RunRequest(
         agent=agent, project=project,
-        messages=[{"role": "user", "content": [{"type": "text", "text": text}]}],
+        messages=messages,
         kind="trigger", run_id=new_id("run"),
         include_shell=True, include_computer=(level == "full"),
         policy_overrides=access_overrides(
@@ -108,7 +129,12 @@ def handle_message(text: str, chat_id, send=None) -> dict:
         if send:
             send(reply)
         return {"blocked": True, "reply": reply}
-    return process_message(text, send=send, source="telegram")
+    key = str(chat_id)
+    res = process_message(text, send=send, source="telegram",
+                          history=_TG_HISTORY.get(key, []))
+    if not res.get("blocked"):
+        _remember_turn(key, text, res.get("reply", ""))
+    return res
 
 
 def notify(text: str, chat_id=None) -> dict:
