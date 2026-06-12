@@ -106,6 +106,63 @@ def remember(text: str, scope: str, scope_id: str = "", importance: float = 0.6,
     return {"id": mem_id, "stored": True}
 
 
+# ── Reflection (auto-extract durable facts) ─────────────────────────────────
+
+def parse_facts(text: str) -> list[str]:
+    """Parse a reflection reply (a JSON array of fact strings). Tolerant of code
+    fences + surrounding prose. Caps at 3 short facts."""
+    raw = text or ""
+    m = re.search(r"```(?:json)?\s*(.+?)```", raw, re.S)
+    body = m.group(1) if m else raw
+    a, b = body.find("["), body.rfind("]")
+    if a == -1 or b == -1 or b <= a:
+        return []
+    try:
+        arr = json.loads(body[a:b + 1])
+    except Exception:
+        return []
+    out = [x.strip()[:300] for x in arr if isinstance(x, str) and x.strip()]
+    return out[:3]
+
+
+def reflect(conversation: str, scope: str, scope_id: str, settings: dict,
+            agent: dict | None = None) -> int:
+    """One-shot: extract durable user facts from a conversation snippet and store
+    them (deduped). Returns how many new facts were stored. Best-effort — any
+    failure (no provider, parse error) just stores nothing."""
+    from aria2.models import registry
+    from aria2.services import agent_service
+    sys = ("Extract durable, user-specific facts worth remembering long-term: "
+           "stable preferences, identity, relationships, ongoing projects or goals. "
+           "Ignore transient task details and anything generic. Output ONLY a JSON "
+           "array of short, self-contained fact strings (e.g. [\"prefers dark mode\", "
+           "\"sister's birthday is June 3\"]); output [] if nothing durable.")
+    try:
+        ov = agent_service.overrides_for(agent) if agent else None
+        provider, model = registry.for_settings(settings, ov)
+    except Exception:
+        return 0
+    buf = ""
+    try:
+        for ev in provider.stream(
+                model=model, system=sys,
+                messages=[{"role": "user",
+                           "content": [{"type": "text", "text": conversation[:4000]}]}],
+                tools=None, max_tokens=400, cache=False):
+            if ev.type == "text":
+                buf += ev.text
+            elif ev.type == "error":
+                return 0
+    except Exception:
+        return 0
+    n = 0
+    for fact in parse_facts(buf):
+        if remember(fact, scope=scope, scope_id=scope_id, importance=0.55,
+                    kind="semantic").get("stored"):
+            n += 1
+    return n
+
+
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
 def recall(query: str, scope: str, scope_id: str = "", limit: int = 6) -> list[dict]:

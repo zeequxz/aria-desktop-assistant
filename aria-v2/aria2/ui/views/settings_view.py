@@ -213,6 +213,13 @@ class SettingsView(ctk.CTkFrame):
         if s.get("self_improvement_enabled", False):
             self.self_improve.select()
 
+        self.mem_reflect = ctk.CTkCheckBox(
+            eng, text="Memory reflection (learn durable facts from chats — extra "
+                      "model call per turn)", font=theme.f(-1))
+        self.mem_reflect.pack(anchor="w", pady=6)
+        if s.get("memory_reflection", False):
+            self.mem_reflect.select()
+
         self.webhook = ctk.CTkCheckBox(
             eng, text="Webhook server (localhost listener that fires webhook triggers)",
             font=theme.f(-1))
@@ -721,6 +728,7 @@ class SettingsView(ctk.CTkFrame):
         s["delegation_enabled"] = bool(self.delegation.get())
         s["mcp_enabled"] = bool(self.mcp.get())
         s["self_improvement_enabled"] = bool(self.self_improve.get())
+        s["memory_reflection"] = bool(self.mem_reflect.get())
         webhook_on = bool(self.webhook.get())
         s["webhook_enabled"] = webhook_on
         s["auto_check_updates"] = bool(self.auto_upd.get())

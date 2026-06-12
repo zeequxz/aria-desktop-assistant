@@ -393,3 +393,15 @@ def _maybe_reflect(chat_id, agent, project, messages, result: RunResult) -> None
         memory_service.remember(
             fact, scope=scope, scope_id=scope_id, importance=0.7, kind="episodic",
         )
+
+    # Reflection (opt-in): on a substantial turn, extract durable user facts in the
+    # background. Off by default — it costs an extra model call per turn.
+    if config.get("memory_reflection", False):
+        blob = f"User: {last_user}\nAssistant: {result.text}"
+        if len(blob) > 200:
+            import threading
+            settings = config.load()
+            threading.Thread(
+                target=lambda: memory_service.reflect(
+                    blob, scope, scope_id, settings, agent),
+                daemon=True, name="reflect").start()

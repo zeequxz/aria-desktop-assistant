@@ -87,6 +87,42 @@ def run_smoke() -> int:
               "note that the wifi password is hunter2") == "the wifi password is hunter2"
           and memory_service.extract_memory_request("what's the weather today") is None)
 
+    # Reflection: parse a JSON array of facts, and extract+store via a stubbed model.
+    check("parse_facts reads a JSON array of facts; junk -> []",
+          memory_service.parse_facts('sure ```json\n["likes tea","has a dog"]\n``` ok')
+          == ["likes tea", "has a dog"]
+          and memory_service.parse_facts("no json here") == [])
+    from aria2.core import config as _cfg_m
+    from aria2.models import registry as _reg0
+
+    class _FactProv:
+        name = "fake"
+
+        def capabilities(self, m):
+            from aria2.models.base import Capabilities
+            return Capabilities(supports_tools=False, supports_caching=False)
+
+        def count_tokens(self, t):
+            return 1
+
+        def stream(self, model, system, messages, tools=None, max_tokens=4096,
+                   temperature=1.0, cache=True):
+            from aria2.models.base import StreamEvent
+            yield StreamEvent(type="text",
+                              text='["the user is named Alex","prefers concise answers"]')
+            yield StreamEvent(type="done", stop_reason="end_turn")
+    _save0 = _reg0.for_settings
+    _reg0.for_settings = lambda s, o=None: (_FactProv(), "fake")
+    try:
+        _rn = memory_service.reflect("User: hi I'm Alex\nAssistant: hello there",
+                                     scope="agent", scope_id="reflecttest",
+                                     settings=_cfg_m.load(), agent=a)
+        _facts = [m["text"] for m in memory_service.list_memories("agent", "reflecttest")]
+        check("reflect extracts durable facts from a turn and stores them",
+              _rn == 2 and any("Alex" in f for f in _facts))
+    finally:
+        _reg0.for_settings = _save0
+
     # Knowledge ingest + search
     knowledge_service.ingest_text(p["id"], "arch.md",
                                   "The run engine streams tokens over an event bus "

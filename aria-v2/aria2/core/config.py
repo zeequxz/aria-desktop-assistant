@@ -89,6 +89,9 @@ DEFAULTS: dict = {
     # hashing fallback — works with no key, lower quality).
     "embedding_provider": "local",
     "ollama_embed_model": "nomic-embed-text",
+    # Reflection: after a turn, extract durable user facts into memory (opt-in —
+    # it costs an extra model call per substantial turn).
+    "memory_reflection": False,
     "voyage_api_key": "",
     "ollama_idle_unload_min": 10,   # unload idle local models after N minutes
     # ── Generation ─────────────────────────────────────────────────────────
