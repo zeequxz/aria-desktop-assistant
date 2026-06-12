@@ -252,6 +252,33 @@ def run_smoke() -> int:
         acc = ambient_service.accept_proposal(props[0]["id"])
         check("accepting a proposal creates a trigger", "trigger_id" in acc)
 
+    # Ambient watcher _scan: prunes ignored dirs (no descending into node_modules),
+    # detects real file changes, and bounds its mtime cache to existing files.
+    import os as _os3
+    import tempfile as _tf3
+    _afold = _tf3.mkdtemp()
+    _os3.makedirs(_os3.path.join(_afold, "node_modules"))
+    _os3.makedirs(_os3.path.join(_afold, "sub"))
+    for _rel in ("a.py", "node_modules/junk.py", "sub/b.py"):
+        with open(_os3.path.join(_afold, _rel), "w", encoding="utf-8") as _fh:
+            _fh.write("x = 1\n")
+    _aproj = project_service.create("AmbientScanTest", folder=_afold)
+    _w = ambient_service.AmbientWatcher()
+    _w._scan()  # first pass seeds mtimes, records nothing
+    _keys = set(_w._mtimes)
+    check("ambient scan tracks real files but skips ignored dirs (node_modules)",
+          any(k.endswith("a.py") for k in _keys)
+          and any(k.endswith("b.py") for k in _keys)
+          and not any("node_modules" in k for k in _keys))
+    import time as _t3
+    _apath = _os3.path.join(_afold, "a.py")
+    _os3.utime(_apath, (_t3.time() + 5, _t3.time() + 5))  # bump mtime into the future
+    _obs_before = len(ambient_service.recent_observations(500))
+    _w._scan()
+    check("ambient scan records a file_change on modification",
+          len(ambient_service.recent_observations(500)) > _obs_before)
+    project_service.delete(_aproj["id"])
+
     # ── Delegation: parallel sub-agents as durable child runs + routing learns ─
     from aria2.services import routing_service
     top_id = _delegation_run(p)

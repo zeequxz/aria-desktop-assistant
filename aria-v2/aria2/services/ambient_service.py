@@ -30,6 +30,11 @@ from aria2.core.ids import new_id, now_ms
 
 _TEXT_EXTS = {".py", ".js", ".ts", ".md", ".txt", ".json", ".sql", ".yaml", ".yml",
               ".go", ".rs", ".java", ".css", ".html"}
+# Dirs the watcher must never descend into — huge and not user-authored source.
+# Pruned in place during os.walk so we don't pay to walk them at all.
+_IGNORE_DIRS = {"node_modules", "__pycache__", "venv", "dist", "build", "target",
+                "out", "bin", "obj", ".tox", ".mypy_cache", ".pytest_cache",
+                ".gradle", ".next", ".cache"}
 _MINE_AFTER = 5          # this many matching observations triggers a proposal
 _MINE_WINDOW_MS = 14 * 24 * 3600 * 1000
 
@@ -187,28 +192,41 @@ class AmbientWatcher:
                 time.sleep(1)
 
     def _scan(self):
+        import os
+
         from aria2.services import project_service
 
+        seen: set[str] = set()
         for p in project_service.list_projects():
             folder = p.get("folder")
             if not folder or not Path(folder).exists():
                 continue
-            for f in Path(folder).rglob("*"):
-                if not f.is_file() or f.suffix.lower() not in _TEXT_EXTS:
-                    continue
-                if ".git" in f.parts:
-                    continue
-                try:
-                    mtime = f.stat().st_mtime
-                except OSError:
-                    continue
-                key = str(f)
-                prev = self._mtimes.get(key)
-                self._mtimes[key] = mtime
-                # On the first pass we just seed mtimes (no false "changes").
-                if not self._first_pass and prev is not None and mtime > prev:
-                    record("file_change", f"{p['id']}:{f.suffix.lower()}",
-                           {"path": key, "name": f.name}, project_id=p["id"])
+            for root, dirs, files in os.walk(folder):
+                # Prune ignored + hidden dirs IN PLACE so os.walk never descends
+                # into them (the whole point — don't pay to walk node_modules/.git).
+                dirs[:] = [d for d in dirs
+                           if d not in _IGNORE_DIRS and not d.startswith(".")]
+                for name in files:
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext not in _TEXT_EXTS:
+                        continue
+                    key = os.path.join(root, name)
+                    try:
+                        mtime = os.stat(key).st_mtime
+                    except OSError:
+                        continue
+                    seen.add(key)
+                    prev = self._mtimes.get(key)
+                    self._mtimes[key] = mtime
+                    # First pass just seeds mtimes (no false "changes").
+                    if not self._first_pass and prev is not None and mtime > prev:
+                        record("file_change", f"{p['id']}:{ext}",
+                               {"path": key, "name": name}, project_id=p["id"])
+        # Bound the cache: drop files no longer present (deleted / project removed),
+        # so _mtimes can't grow without limit. Skip if the scan saw nothing (a
+        # transient empty pass shouldn't wipe the cache).
+        if seen:
+            self._mtimes = {k: v for k, v in self._mtimes.items() if k in seen}
         self._first_pass = False
 
 
