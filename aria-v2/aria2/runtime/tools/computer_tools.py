@@ -50,6 +50,27 @@ def _act(fn):
         return {"error": f"Computer action failed: {e}"}
 
 
+_MAX_EDGE = 1568  # downscale the model-facing image to Anthropic's recommended max
+
+
+def _encode_image(img) -> dict:
+    """Base64-encode a (downscaled) PNG of the screenshot for the model to see.
+    The full-resolution image is saved to disk separately; this copy is shrunk to
+    keep the request small and within the provider's recommended image size."""
+    import base64
+    import io
+    vis = img
+    longest = max(img.width, img.height)
+    if longest > _MAX_EDGE:
+        ratio = _MAX_EDGE / longest
+        vis = img.resize((max(1, int(img.width * ratio)),
+                          max(1, int(img.height * ratio))))
+    buf = io.BytesIO()
+    vis.save(buf, format="PNG")
+    return {"media_type": "image/png",
+            "data": base64.b64encode(buf.getvalue()).decode("ascii")}
+
+
 def _prune_screenshots(folder: Path, keep: int = _MAX_SHOTS) -> None:
     """Delete all but the newest `keep` screenshots so captures don't grow without
     bound on disk."""
@@ -74,9 +95,11 @@ def make_computer_tools() -> list[Tool]:
             shots.mkdir(parents=True, exist_ok=True)
             path = shots / f"shot_{new_id('s')}.png"
             img = pyautogui.screenshot()
-            img.save(path)
+            img.save(path)  # full-resolution copy on disk
             _prune_screenshots(shots)
-            return {"path": str(path), "width": img.width, "height": img.height}
+            out = {"path": str(path), "width": img.width, "height": img.height,
+                   "_image": _encode_image(img)}
+            return out
         return _act(_do)
 
     def get_screen_size() -> dict:
@@ -151,8 +174,10 @@ def make_computer_tools() -> list[Tool]:
 
     obj = {"type": "object"}
     return [
-        Tool("take_screenshot", "Capture the screen to a PNG file; returns its path "
-             "and size.", obj, take_screenshot, default_policy="ask"),
+        Tool("take_screenshot", "Capture the screen and return it as an image you "
+             "can SEE (plus the saved file path and size). Use this to look at the "
+             "screen before deciding where to click or type.", obj, take_screenshot,
+             default_policy="ask"),
         Tool("get_screen_size", "Get the screen resolution.", obj, get_screen_size,
              default_policy="allow"),
         Tool("mouse_move", "Move the mouse to absolute (x, y).",

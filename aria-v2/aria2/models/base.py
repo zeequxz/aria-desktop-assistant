@@ -25,6 +25,9 @@ class Capabilities:
     supports_tools: bool = True
     supports_vision: bool = False
     supports_caching: bool = False
+    # Can the provider accept an image *inside a tool_result* (Anthropic can;
+    # OpenAI's tool role is text-only). Gates returning screenshots to the model.
+    supports_image_tool_results: bool = False
     # USD per 1M tokens, for the cost meter.
     input_cost_per_mtok: float = 0.0
     output_cost_per_mtok: float = 0.0

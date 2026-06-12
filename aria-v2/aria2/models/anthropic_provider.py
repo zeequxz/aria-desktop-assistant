@@ -51,6 +51,7 @@ class AnthropicProvider:
             supports_tools=True,
             supports_vision=True,
             supports_caching=True,
+            supports_image_tool_results=True,
             input_cost_per_mtok=cin,
             output_cost_per_mtok=cout,
         )

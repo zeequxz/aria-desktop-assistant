@@ -393,7 +393,7 @@ class RunEngine:
                 out = self._run_tool(run_id, step_idx, tc, toolset, agent_scopes, defaults)
                 results_content.append(
                     {"type": "tool_result", "tool_use_id": tc["id"],
-                     "content": json.dumps(out, default=str)}
+                     "content": _tool_result_content(out, caps)}
                 )
             messages.append({"role": "tool", "content": results_content})
 
@@ -425,11 +425,17 @@ class RunEngine:
                     out = tool.fn(**tool_input)
                 except Exception as e:
                     out = {"error": f"Tool failed: {e}"}
+                # Persist a slim copy: a tool may return an image (e.g. a
+                # screenshot) for the model to see, but the base64 must not bloat
+                # the run-step row / the bus event. It still reaches the model via
+                # _tool_result_content below.
                 self._record_step(
                     run_id, idx, "tool", tool_name=name,
-                    input_data=tool_input, output=out, duration_ms=now_ms() - t0,
+                    input_data=tool_input, output=_strip_image(out),
+                    duration_ms=now_ms() - t0,
                 )
-        bus.publish("run.tool", {"run_id": run_id, "name": name, "phase": "result", "output": out})
+        bus.publish("run.tool", {"run_id": run_id, "name": name, "phase": "result",
+                                 "output": _strip_image(out)})
         return out
 
     def _oneshot(self, provider, model, prompt: str) -> str:
@@ -495,6 +501,42 @@ class RunEngine:
             "target": target, "detail_json": json.dumps(detail),
             "run_id": run_id, "created_at": now_ms(),
         })
+
+
+def _strip_image(out):
+    """Replace an inline `_image` (base64) with a short placeholder so the run
+    step / bus event don't carry megabytes of image data."""
+    if isinstance(out, dict) and "_image" in out:
+        img = out.get("_image") or {}
+        data = img.get("data", "") if isinstance(img, dict) else ""
+        slim = {k: v for k, v in out.items() if k != "_image"}
+        slim["image"] = (f"<{(img or {}).get('media_type', 'image')}, "
+                         f"{len(data)} b64 chars (sent to model, not stored)>")
+        return slim
+    return out
+
+
+def _tool_result_content(out, caps):
+    """Build the tool_result `content` fed back to the model. If the tool returned
+    an `_image` and the model can accept images inside a tool result, send a
+    [text, image] block list so the model can SEE it; otherwise send JSON text
+    (stripped of the base64) with a note."""
+    img = out.get("_image") if isinstance(out, dict) else None
+    if img and getattr(caps, "supports_image_tool_results", False) and img.get("data"):
+        summary = {k: v for k, v in out.items() if k != "_image"}
+        return [
+            {"type": "text", "text": json.dumps(summary, default=str)},
+            {"type": "image", "source": {
+                "type": "base64",
+                "media_type": img.get("media_type", "image/png"),
+                "data": img["data"]}},
+        ]
+    if isinstance(out, dict) and "_image" in out:
+        slim = {k: v for k, v in out.items() if k != "_image"}
+        slim["note"] = ("Screenshot saved to 'path'; this model can't view images "
+                        "in a tool result, so only the path is provided.")
+        return json.dumps(slim, default=str)
+    return json.dumps(out, default=str)
 
 
 def _last_user_text(messages: list[dict]) -> str:

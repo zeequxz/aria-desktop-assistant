@@ -67,10 +67,18 @@ class OpenAIProvider:
             if role == "tool":
                 for b in content:
                     if b.get("type") == "tool_result":
+                        c = b.get("content", "")
+                        # OpenAI's tool role is text-only. If a result carries a
+                        # block list (e.g. text + image), keep just the text — the
+                        # image is dropped (we only attach images for providers
+                        # that support images in tool results).
+                        if isinstance(c, list):
+                            c = "".join(part.get("text", "") for part in c
+                                        if isinstance(part, dict) and part.get("type") == "text")
                         out.append({
                             "role": "tool",
                             "tool_call_id": b["tool_use_id"],
-                            "content": b.get("content", ""),
+                            "content": c,
                         })
                 continue
             parts, tool_calls, has_image = [], [], False

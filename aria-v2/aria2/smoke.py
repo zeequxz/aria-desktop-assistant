@@ -1189,6 +1189,31 @@ def run_smoke() -> int:
     finally:
         _oreg.for_settings = _save_reg
 
+    # Vision tool-results: a tool's _image reaches an image-capable model as an
+    # image block, is stripped before storage, and never breaks a text-only model.
+    import json as _vjson
+    _vshot = {"path": "x.png", "width": 2, "height": 2,
+              "_image": {"media_type": "image/png", "data": "QUJD"}}
+    _vc = _re._tool_result_content(_vshot, _Caps(supports_image_tool_results=True))
+    check("tool_result sends an image block to an image-capable model",
+          isinstance(_vc, list) and any(b.get("type") == "image" for b in _vc)
+          and _vc[-1]["source"]["data"] == "QUJD")
+    _nc = _re._tool_result_content(_vshot, _Caps(supports_image_tool_results=False))
+    check("tool_result falls back to text (no base64) for a text-only model",
+          isinstance(_nc, str) and "QUJD" not in _nc and "path" in _nc)
+    check("_strip_image keeps metadata but drops the base64 for storage",
+          "_image" not in _re._strip_image(_vshot)
+          and "QUJD" not in _vjson.dumps(_re._strip_image(_vshot)))
+    from aria2.models.openai_provider import OpenAIProvider as _OAP
+    _oai_msgs = _OAP._to_openai("sys", [{"role": "tool", "content": [
+        {"type": "tool_result", "tool_use_id": "t1",
+         "content": [{"type": "text", "text": "saw screen"},
+                     {"type": "image", "source": {"type": "base64",
+                      "media_type": "image/png", "data": "QUJD"}}]}]}])
+    _toolmsg = [m for m in _oai_msgs if m.get("role") == "tool"][0]
+    check("OpenAI translator drops image blocks from a tool result (text-only role)",
+          _toolmsg["content"] == "saw screen")
+
     # ── Computer-use tools: input validation + screenshot retention ───────────
     from aria2.runtime.tools.computer_tools import _prune_screenshots as _prune
     from aria2.runtime.tools.computer_tools import make_computer_tools as _mct
