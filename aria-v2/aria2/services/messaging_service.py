@@ -30,24 +30,6 @@ _SAFE = ["read_file", "list_dir", "search_knowledge", "recall", "remember"]
 _WRITE = ["write_file", "edit_file"]
 _SHELL = ["run_shell", "run_python"]
 
-# In-memory per-conversation history so the Telegram + Discord bridges are
-# conversational (follow-ups keep context) instead of treating each message as
-# isolated. Keyed per chat/channel; bounded to the last few turns; reset on app
-# restart (good enough for a remote-control bridge).
-_DM_HISTORY: dict[str, list[dict]] = {}
-_DM_MAX_TURNS = 6
-
-
-def _remember_turn(chat_key: str, user_text: str, reply: str) -> None:
-    """Append a user+assistant turn to a chat's history (text only — never a
-    tool_use, which would dangle and break the next request), bounded to the last
-    _DM_MAX_TURNS turns."""
-    turns = _DM_HISTORY.get(chat_key, []) + [
-        {"role": "user", "content": [{"type": "text", "text": user_text}]},
-        {"role": "assistant", "content": [{"type": "text", "text": reply or ""}]},
-    ]
-    _DM_HISTORY[chat_key] = turns[-(_DM_MAX_TURNS * 2):]
-
 
 def access_overrides(level: str, require_confirmation: bool = True) -> dict:
     """Map an access level to per-tool allow/deny overrides for a run.
@@ -67,20 +49,34 @@ def access_overrides(level: str, require_confirmation: bool = True) -> dict:
 
 
 def process_message(text: str, send=None, source: str = "telegram",
-                    history: list | None = None) -> dict:
+                    external_id=None) -> dict:
     """Run the agent on an authorised inbound message under the configured access
     level, reply via `send`, and return {reply, run_id}. (No allowlist check —
-    callers gate authorisation per channel.) `history` (prior turns) is prepended
-    so a conversation has context."""
+    callers gate authorisation per channel.)
+
+    When `external_id` is given, the conversation is backed by a durable chat
+    (find-or-create), so prior turns give the run context and the thread is visible
+    in the desktop Chat view. Without it, the message is handled statelessly."""
     s = config.load()
     from aria2.runtime.run_engine import RunEngine, RunRequest
-    from aria2.services import agent_service, project_service
+    from aria2.services import agent_service, chat_service, project_service
 
     level = s.get("messaging_access", "restricted")
     agent = agent_service.get(s.get("messaging_agent", "assistant")) \
         or agent_service.get("assistant")
     project = project_service.get(s.get("messaging_project", "general")) \
         or project_service.get("general")
+
+    # Back the conversation with a durable chat so follow-ups have context and the
+    # thread shows up in the GUI; persist the user turn before running.
+    chat_id = None
+    if external_id is not None:
+        chat_id = chat_service.get_or_create_external_chat(
+            source, external_id, project["id"], agent["id"])
+        chat_service._persist_message(chat_id, "user", [{"type": "text", "text": text}])
+        messages = chat_service._history_for_engine(chat_id)
+    else:
+        messages = [{"role": "user", "content": [{"type": "text", "text": text}]}]
 
     # Per-messaging-source model override (separate from the global default).
     # "local" forces Ollama; "cloud" forces the configured cloud provider;
@@ -99,12 +95,10 @@ def process_message(text: str, send=None, source: str = "telegram",
                           if k != "provider"}
 
     engine = RunEngine(s)
-    messages = list(history or []) + [
-        {"role": "user", "content": [{"type": "text", "text": text}]}]
     req = RunRequest(
         agent=agent, project=project,
         messages=messages,
-        kind="trigger", run_id=new_id("run"),
+        kind="trigger", chat_id=chat_id, run_id=new_id("run"),
         include_shell=True, include_computer=(level == "full"),
         policy_overrides=access_overrides(
             level, s.get("messaging_require_confirmation", True)),
@@ -113,6 +107,12 @@ def process_message(text: str, send=None, source: str = "telegram",
     )
     result = engine.execute(req)
     reply = result.text or f"(no reply — {result.status})"
+    # Persist the assistant reply to the durable chat (text only — never a bare
+    # tool_use, which would dangle and break the next turn).
+    if chat_id:
+        visible = chat_service._visible_assistant_content(result.assistant_content)
+        if visible:
+            chat_service._persist_message(chat_id, "assistant", visible)
     if send:
         send(reply)
     bus.publish("messaging.handled", {"source": source, "level": level,
@@ -130,12 +130,7 @@ def handle_message(text: str, chat_id, send=None) -> dict:
         if send:
             send(reply)
         return {"blocked": True, "reply": reply}
-    key = str(chat_id)
-    res = process_message(text, send=send, source="telegram",
-                          history=_DM_HISTORY.get(key, []))
-    if not res.get("blocked"):
-        _remember_turn(key, text, res.get("reply", ""))
-    return res
+    return process_message(text, send=send, source="telegram", external_id=chat_id)
 
 
 def notify(text: str, chat_id=None) -> dict:
@@ -344,15 +339,11 @@ class DiscordBridge:
                 return
             import asyncio
 
-            key = f"discord:{message.channel.id}"
-
             def _work():
                 return process_message(message.content, source="discord",
-                                       history=_DM_HISTORY.get(key, []))
+                                       external_id=message.channel.id)
 
             result = await asyncio.to_thread(_work)
-            if not result.get("blocked"):
-                _remember_turn(key, message.content, result.get("reply", ""))
             try:
                 await message.channel.send(result.get("reply", "")[:1900])
             except Exception:

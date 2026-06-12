@@ -1406,16 +1406,10 @@ def run_smoke() -> int:
                               _Caps(supports_vision=True, supports_image_tool_results=True)) is None
           and _re._image_followup([_imgout], _Caps(supports_vision=False)) is None)
 
-    # Telegram + Discord bridges are now conversational: prior turns are threaded
-    # into the run, and per-conversation history is bounded.
+    # Remote bridges (Telegram/Discord) back each conversation with a DURABLE chat:
+    # the thread is persisted + visible in the GUI, and follow-ups have context.
+    from aria2.services import chat_service as _cs2
     from aria2.services import messaging_service as _msg
-    _msg._DM_HISTORY.clear()
-    for _i in range(10):
-        _msg._remember_turn("c1", f"q{_i}", f"a{_i}")
-    check("messaging per-conversation history is bounded to the last N turns",
-          len(_msg._DM_HISTORY["c1"]) == _msg._DM_MAX_TURNS * 2
-          and _msg._DM_HISTORY["c1"][-1]["content"][0]["text"] == "a9")
-
     _seen_msgs = []
 
     class _MsgProv:
@@ -1430,17 +1424,22 @@ def run_smoke() -> int:
         def stream(self, model, system, messages, tools=None, max_tokens=4096,
                    temperature=1.0, cache=True):
             _seen_msgs.append(messages)
-            yield _SEv(type="text", text="ack")
+            yield _SEv(type="text", text="meow")
             yield _SEv(type="usage", usage={"input": 1, "output": 1})
             yield _SEv(type="done", stop_reason="end_turn")
     _save_reg5 = _oreg.for_settings
     _oreg.for_settings = lambda s, o=None: (_MsgProv(), "fake")
     try:
-        _hist = [{"role": "user", "content": [{"type": "text", "text": "tell me about cats"}]},
-                 {"role": "assistant", "content": [{"type": "text", "text": "cats are great"}]}]
-        _msg.process_message("and dogs?", history=_hist)
+        _msg.process_message("tell me about cats", source="telegram", external_id="99001")
+        _cid = "cht_te_99001"
+        _m1 = _cs2.list_messages(_cid)
+        check("a remote message creates a durable, visible chat with both turns",
+              _cs2.get_chat(_cid) is not None
+              and any(m["role"] == "user" for m in _m1)
+              and any(m["role"] == "assistant" for m in _m1))
+        _msg.process_message("and dogs?", source="telegram", external_id="99001")
         _flat = _vjson.dumps(_seen_msgs[-1]) if _seen_msgs else ""
-        check("telegram process_message threads prior conversation history",
+        check("a remote follow-up threads the prior durable history into the run",
               "tell me about cats" in _flat and "and dogs?" in _flat)
     finally:
         _oreg.for_settings = _save_reg5

@@ -170,6 +170,26 @@ def fork(chat_id: str, up_to_message_id: str | None = None) -> dict:
     return get_chat(new_cid)
 
 
+def get_or_create_external_chat(source: str, external_id, project_id: str = "general",
+                                agent_id: str = "assistant") -> str:
+    """Find (or create) the durable chat backing a remote conversation (Telegram /
+    Discord), keyed deterministically by source + remote id. So a remote thread is
+    a real chat — persisted across restarts and visible in the desktop Chat view."""
+    cid = f"cht_{source[:2]}_{external_id}"
+    if get_chat(cid):
+        return cid
+    ts = now_ms()
+    icon = {"telegram": "📱", "discord": "💬"}.get(source, "🌐")
+    db.insert("chats", {
+        "id": cid, "project_id": project_id,
+        "title": f"{icon} {source.title()} {external_id}", "agent_id": agent_id,
+        "parent_chat_id": None, "branch_point_message_id": None,
+        "pinned": 0, "archived": 0, "created_at": ts, "updated_at": ts,
+    })
+    bus.publish("chat.created", {"chat_id": cid, "project_id": project_id})
+    return cid
+
+
 # ── Messages ──────────────────────────────────────────────────────────────────
 
 def list_messages(chat_id: str, limit: int | None = None) -> list[dict]:
