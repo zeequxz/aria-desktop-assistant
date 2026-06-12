@@ -135,8 +135,9 @@ def apply_agent_proposal(payload: dict) -> dict:
         return {"error": "empty guidance"}
     marker = "\n\n[Learned guidance]\n"
     new_prompt = agent["system_prompt"].split(marker)[0] + marker + append
-    agent_service.update(agent["id"], {"system_prompt": new_prompt})
-    db.execute("UPDATE agents SET version = version + 1 WHERE id=?", (agent["id"],))
+    # update() snapshots the prior prompt + bumps the version (rollback-able).
+    agent_service.update(agent["id"], {"system_prompt": new_prompt},
+                         note="self-improvement: learned guidance")
     return {"applied": True, "agent_id": agent["id"]}
 
 

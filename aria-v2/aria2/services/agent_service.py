@@ -38,15 +38,53 @@ def create(name: str, system_prompt: str, *, icon: str = "✦", color: str = "#6
     return get(aid)
 
 
-def update(agent_id: str, changes: dict) -> None:
+def update(agent_id: str, changes: dict, *, note: str = "") -> None:
     if "tool_scopes" in changes:
         changes["tool_scopes_json"] = json.dumps(changes.pop("tool_scopes"))
     allowed = {k: v for k, v in changes.items() if k in {
         "name", "icon", "color", "description", "system_prompt", "provider",
         "model", "tool_scopes_json", "memory_scope",
     }}
+    # When the system prompt changes, snapshot the OLD one and bump the version,
+    # so every revision is recoverable (prompt rollback + self-improvement audit).
+    if "system_prompt" in allowed:
+        old = get(agent_id)
+        if old and (old.get("system_prompt") or "") != allowed["system_prompt"]:
+            _snapshot_prompt(old, note=note)
+            allowed["version"] = int(old.get("version") or 1) + 1
     allowed["updated_at"] = now_ms()
     db.update("agents", agent_id, allowed)
+
+
+def _snapshot_prompt(agent: dict, note: str = "") -> None:
+    db.insert("agent_prompt_versions", {
+        "id": new_id("pv"), "agent_id": agent["id"],
+        "version": int(agent.get("version") or 1),
+        "system_prompt": agent.get("system_prompt") or "",
+        "note": note, "created_at": now_ms(),
+    })
+
+
+def prompt_versions(agent_id: str) -> list[dict]:
+    """Past system-prompt revisions for an agent, newest first."""
+    rows = db.all(
+        "SELECT id, version, system_prompt, note, created_at "
+        "FROM agent_prompt_versions WHERE agent_id=? ORDER BY version DESC",
+        (agent_id,))
+    return [dict(r) for r in rows]
+
+
+def rollback_prompt(agent_id: str, version: int) -> dict:
+    """Restore a previous system-prompt version (itself snapshotted, so it's
+    reversible). Returns {ok} or {error}."""
+    row = db.one(
+        "SELECT system_prompt FROM agent_prompt_versions WHERE agent_id=? AND version=?",
+        (agent_id, version))
+    if not row:
+        return {"error": f"no version {version} for this agent"}
+    update(agent_id, {"system_prompt": row["system_prompt"]},
+           note=f"rollback to v{version}")
+    return {"ok": True, "restored_version": version}
 
 
 def delete(agent_id: str) -> dict:

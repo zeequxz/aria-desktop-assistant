@@ -12,7 +12,11 @@ from __future__ import annotations
 
 from typing import Iterator
 
-from aria2.models.base import Capabilities, StreamEvent, estimate_tokens
+import time
+
+from aria2.models.base import (
+    Capabilities, StreamEvent, estimate_tokens, is_retryable, retry_sleep)
+from aria2.core import logs
 
 try:
     import anthropic
@@ -104,6 +108,23 @@ class AnthropicProvider:
         if api_tools:
             kwargs["tools"] = api_tools
 
+        # Retry transient failures (429 / 5xx / overloaded) — but only while
+        # nothing has been streamed yet, so a retry can never duplicate output.
+        for _attempt in range(4):
+            yielded = False
+            try:
+                yield from self._stream_once(kwargs)
+                return
+            except _Retry as r:
+                if r.yielded or not is_retryable(r.cause) or _attempt == 3:
+                    yield StreamEvent(type="error", error=str(r.cause))
+                    return
+                logs.get("anthropic").warning(
+                    logs.j("retry", attempt=_attempt, error=str(r.cause)))
+                time.sleep(retry_sleep(_attempt))
+
+    def _stream_once(self, kwargs: dict):
+        yielded = False
         try:
             with self._client.messages.stream(**kwargs) as stream:
                 tool_inputs: dict[int, dict] = {}
@@ -120,6 +141,7 @@ class AnthropicProvider:
                     elif et == "content_block_delta":
                         d = event.delta
                         if getattr(d, "type", None) == "text_delta":
+                            yielded = True
                             yield StreamEvent(type="text", text=d.text)
                         elif getattr(d, "type", None) == "input_json_delta":
                             if event.index in tool_inputs:
@@ -133,6 +155,7 @@ class AnthropicProvider:
                                 parsed = json.loads(t["input_json"] or "{}")
                             except Exception:
                                 parsed = {}
+                            yielded = True
                             yield StreamEvent(
                                 type="tool_use",
                                 tool_call={"id": t["id"], "name": t["name"], "input": parsed},
@@ -148,8 +171,10 @@ class AnthropicProvider:
                 }
                 yield StreamEvent(type="usage", usage=usage)
                 yield StreamEvent(type="done", stop_reason=final.stop_reason or "end_turn")
-        except Exception as e:  # surface as a stream event, don't crash the engine
-            yield StreamEvent(type="error", error=str(e))
+        except Exception as e:
+            # Hand control back to the retry loop, telling it whether anything
+            # was already streamed (if so, a retry is unsafe → surface error).
+            raise _Retry(e, yielded)
 
     @staticmethod
     def _add_history_cache_breakpoint(msgs: list[dict]) -> list[dict]:
@@ -169,3 +194,13 @@ class AnthropicProvider:
                 target["content"] = content
                 msgs[-2] = target
         return msgs
+
+
+class _Retry(Exception):
+    """Internal: carries a transient error + whether output already streamed
+    (so the stream() retry loop only retries when nothing was emitted)."""
+
+    def __init__(self, cause: Exception, yielded: bool):
+        super().__init__(str(cause))
+        self.cause = cause
+        self.yielded = yielded

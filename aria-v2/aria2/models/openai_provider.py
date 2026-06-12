@@ -8,9 +8,12 @@ explicit cache_control to set.
 from __future__ import annotations
 
 import json
+import time
 from typing import Iterator
 
-from aria2.models.base import Capabilities, StreamEvent, estimate_tokens
+from aria2.core import logs
+from aria2.models.base import (
+    Capabilities, StreamEvent, estimate_tokens, is_retryable, retry_sleep)
 
 try:
     import openai
@@ -132,6 +135,21 @@ class OpenAIProvider:
         )
         if tools:
             kwargs["tools"] = self._tools_to_openai(tools)
+        # Retry transient failures (429 / 5xx) only while nothing has streamed.
+        for _attempt in range(4):
+            try:
+                yield from self._stream_once(kwargs)
+                return
+            except _OAIRetry as r:
+                if r.yielded or not is_retryable(r.cause) or _attempt == 3:
+                    yield StreamEvent(type="error", error=str(r.cause))
+                    return
+                logs.get("openai").warning(
+                    logs.j("retry", attempt=_attempt, error=str(r.cause)))
+                time.sleep(retry_sleep(_attempt))
+
+    def _stream_once(self, kwargs: dict) -> Iterator[StreamEvent]:
+        yielded = False
         try:
             partial: dict[int, dict] = {}
             stop_reason = "end_turn"
@@ -147,6 +165,7 @@ class OpenAIProvider:
                 choice = chunk.choices[0]
                 delta = choice.delta
                 if delta.content:
+                    yielded = True
                     yield StreamEvent(type="text", text=delta.content)
                 for tc in delta.tool_calls or []:
                     slot = partial.setdefault(
@@ -165,6 +184,7 @@ class OpenAIProvider:
                     parsed = json.loads(slot["args"] or "{}")
                 except Exception:
                     parsed = {}
+                yielded = True
                 yield StreamEvent(
                     type="tool_use",
                     tool_call={"id": slot["id"], "name": slot["name"], "input": parsed},
@@ -173,4 +193,11 @@ class OpenAIProvider:
                 yield StreamEvent(type="usage", usage=usage)
             yield StreamEvent(type="done", stop_reason=stop_reason)
         except Exception as e:
-            yield StreamEvent(type="error", error=str(e))
+            raise _OAIRetry(e, yielded)
+
+
+class _OAIRetry(Exception):
+    def __init__(self, cause: Exception, yielded: bool):
+        super().__init__(str(cause))
+        self.cause = cause
+        self.yielded = yielded

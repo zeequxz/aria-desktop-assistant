@@ -39,49 +39,75 @@ def _load_schema() -> str:
 
 _SCHEMA = _load_schema()
 
-_conn: sqlite3.Connection | None = None
-_lock = threading.RLock()
+# WAL lets many threads read concurrently with a single writer. We give each
+# thread its own connection (so reads never block each other) and serialise only
+# WRITES with a process-wide lock (so we never thrash on SQLITE_BUSY). This lifts
+# the old "one connection behind one RLock" bottleneck for the read-heavy path.
+_write_lock = threading.Lock()
+_local = threading.local()
 
 
-def _connect() -> sqlite3.Connection:
-    global _conn
-    if _conn is not None:
-        return _conn
+def _conn() -> sqlite3.Connection:
+    c = getattr(_local, "conn", None)
+    if c is not None:
+        return c
     config.app_dir()  # ensure dir exists
     c = sqlite3.connect(
         str(config.DB_FILE),
-        check_same_thread=False,  # we serialise access ourselves via _lock
+        check_same_thread=False,  # each thread has its own connection
         timeout=30.0,
     )
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode = WAL")
     c.execute("PRAGMA foreign_keys = ON")
     c.execute("PRAGMA synchronous = NORMAL")
-    # Wait (don't immediately error) if another thread holds a write lock —
-    # the engine now runs UI + scheduler + parallel delegation + messaging
-    # concurrently against one connection.
     c.execute("PRAGMA busy_timeout = 5000")
-    c.executescript(_SCHEMA)
-    from aria2.core import migrations
-
-    migrations.migrate(c)
-    c.commit()
-    _conn = c
+    _local.conn = c
     return c
 
 
+def _reset() -> None:
+    """Drop this thread's connection (used by tests that re-point DB_FILE)."""
+    c = getattr(_local, "conn", None)
+    if c is not None:
+        try:
+            c.close()
+        except Exception:
+            pass
+    _local.__dict__.pop("conn", None)
+
+
 def init() -> None:
-    """Create the schema and seed built-in data. Idempotent."""
-    with _lock:
-        _connect()
+    """Create the schema, seed built-in data, recover orphaned runs. Idempotent."""
+    conn = _conn()
+    conn.executescript(_SCHEMA)
+    from aria2.core import migrations
+
+    migrations.migrate(conn)
+    conn.commit()
     _seed()
+    _reconcile_interrupted_runs()
+
+
+def _reconcile_interrupted_runs() -> None:
+    """Any run still marked 'running' at startup is orphaned from a previous
+    crash/kill — mark it 'interrupted' so it can't linger forever (and so the
+    Runs view + reliability metrics tell the truth)."""
+    try:
+        with tx() as conn:
+            conn.execute(
+                "UPDATE runs SET status='interrupted', ended_at=? "
+                "WHERE status='running'", (now_ms(),))
+    except Exception:
+        pass
 
 
 @contextmanager
 def tx():
-    """Transaction context. Commits on success, rolls back on exception."""
-    with _lock:
-        conn = _connect()
+    """Write transaction. Serialised across threads; commit on success, rollback
+    on exception."""
+    conn = _conn()
+    with _write_lock:
         try:
             yield conn
             conn.commit()
@@ -96,15 +122,12 @@ def execute(sql: str, params: tuple | dict = ()):  # noqa: ANN001
 
 
 def one(sql: str, params: tuple | dict = ()) -> sqlite3.Row | None:  # noqa: ANN001
-    with _lock:
-        cur = _connect().execute(sql, params)
-        return cur.fetchone()
+    # Lock-free read (WAL MVCC snapshot on this thread's own connection).
+    return _conn().execute(sql, params).fetchone()
 
 
 def all(sql: str, params: tuple | dict = ()) -> list[sqlite3.Row]:  # noqa: ANN001,A001
-    with _lock:
-        cur = _connect().execute(sql, params)
-        return cur.fetchall()
+    return _conn().execute(sql, params).fetchall()
 
 
 def insert(table: str, row: dict) -> None:

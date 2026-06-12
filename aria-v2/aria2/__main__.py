@@ -12,6 +12,14 @@ from aria2.core import db
 
 
 def main() -> int:
+    smoke = "--smoke" in sys.argv
+    if not smoke:
+        # File logging — the windowed app has no console, so this is the only
+        # place failures are recorded. (Skipped for --smoke to keep it isolated.)
+        from aria2.core import logs
+        logs.setup()
+        logs.attach_bus()
+        logs.get("app").info(logs.j("startup"))
     db.init()
     # Ensure the app icon exists (generates if first run or missing).
     try:
@@ -22,7 +30,7 @@ def main() -> int:
             make()
     except Exception:
         pass
-    if "--smoke" in sys.argv:
+    if smoke:
         from aria2.smoke import run_smoke
 
         return run_smoke()

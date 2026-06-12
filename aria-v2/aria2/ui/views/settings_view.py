@@ -384,6 +384,17 @@ class SettingsView(ctk.CTkFrame):
         self.update_status.pack(side="left", padx=10)
         self._pending_update = None
 
+        # ── Diagnostics ─────────────────────────────────────────────────────
+        diag = self._section("Diagnostics", prov=u_tab)
+        ctk.CTkLabel(diag, text="Application logs (errors, runs, scheduler).",
+                     font=theme.f(-1), text_color=theme.TEXT_DIM).pack(
+            anchor="w", pady=(0, 6))
+        drow = ctk.CTkFrame(diag, fg_color="transparent")
+        drow.pack(fill="x")
+        w.ghost_button(drow, "View logs", self._view_logs, width=110).pack(side="left")
+        w.ghost_button(drow, "Open logs folder", self._open_logs_folder,
+                       width=150).pack(side="left", padx=8)
+
         # ── Sticky save bar ──────────────────────────────────────────────────
         bar = ctk.CTkFrame(self, fg_color=theme.SIDEBAR,
                            border_width=1, border_color=theme.BORDER)
@@ -625,6 +636,29 @@ class SettingsView(ctk.CTkFrame):
                 text=msg, text_color=theme.SUCCESS if res.get("ok") else theme.DANGER))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _view_logs(self):
+        from aria2.core import logs
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("ARIA logs")
+        dlg.geometry("820x540")
+        dlg.configure(fg_color=theme.SURFACE)
+        dlg.transient(self.winfo_toplevel())
+        box = ctk.CTkTextbox(dlg, font=(theme.MONO, theme.font_size() - 1),
+                             fg_color=theme.SURFACE_2, wrap="none")
+        box.pack(fill="both", expand=True, padx=10, pady=10)
+        box.insert("1.0", logs.tail(500))
+        box.see("end")
+        box.configure(state="disabled")
+        w.ghost_button(dlg, "Close", dlg.destroy, width=90).pack(pady=(0, 10))
+
+    def _open_logs_folder(self):
+        from aria2.core import logs
+        try:
+            import os
+            os.startfile(str(logs.log_path().parent))  # noqa: S606 (user action)
+        except Exception:
+            self.app.toast(f"Logs: {logs.log_path()}", "info")
 
     def _restart_for_update(self):
         """Quit so the detached updater can replace the files and relaunch."""

@@ -91,3 +91,19 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     # Project trust level (controls default tool permissions for all its chats).
     _add_column(conn, "projects", "trust_level", "TEXT DEFAULT 'ask'")
+
+    # Prompt version history — every agent system-prompt revision is snapshotted
+    # so it can be rolled back (and self-improvement edits are auditable).
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS agent_prompt_versions (
+            id            TEXT PRIMARY KEY,
+            agent_id      TEXT NOT NULL,
+            version       INTEGER NOT NULL,
+            system_prompt TEXT NOT NULL,
+            note          TEXT,
+            created_at    INTEGER NOT NULL)"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prompt_versions_agent "
+        "ON agent_prompt_versions(agent_id, version)"
+    )

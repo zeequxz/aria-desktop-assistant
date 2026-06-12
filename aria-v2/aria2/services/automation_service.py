@@ -311,6 +311,7 @@ class Scheduler:
         self._running = False
         self._thread: threading.Thread | None = None
         self._file_state: dict[str, tuple] = {}  # trigger_id -> last signature
+        self._last_maint = 0.0
 
     def start(self):
         if self._running:
@@ -326,16 +327,34 @@ class Scheduler:
         webhook_server.stop()
 
     def _loop(self):
+        from aria2.core import logs
+        log = logs.get("scheduler")
         while self._running:
             try:
                 self._check_schedule()
                 self._check_files()
-            except Exception as e:  # never let the scheduler thread die
-                print(f"[Scheduler] {e}")
+                self._maybe_maintain(log)
+            except Exception:  # never let the scheduler thread die
+                log.exception(logs.j("scheduler_tick_failed"))
             for _ in range(30):
                 if not self._running:
                     return
                 time.sleep(1)
+
+    def _maybe_maintain(self, log):
+        """Periodic housekeeping (every ~6h): decay stale, unused memories so the
+        store doesn't grow without bound."""
+        now = time.time()
+        if now - self._last_maint < 6 * 3600:
+            return
+        self._last_maint = now
+        try:
+            from aria2.services import memory_service
+            n = memory_service.decay()
+            if n:
+                log.info(logs.j("memory_decay", removed=n))
+        except Exception:
+            log.exception(logs.j("memory_decay_failed"))
 
     def _check_schedule(self):
         now = now_ms()
@@ -398,7 +417,12 @@ class WebhookServer:
                 if len(parts) != 2 or parts[0] != "hook":
                     self.send_response(404); self.end_headers(); return
                 trigger_id = parts[1]
+                # Prefer the Authorization: Bearer header (keeps the secret out
+                # of URLs/logs); fall back to ?token= for back-compat.
                 token = parse_qs(parsed.query).get("token", [""])[0]
+                auth = self.headers.get("Authorization", "")
+                if auth[:7].lower() == "bearer ":
+                    token = auth[7:].strip() or token
                 t = get(trigger_id)
                 if not t or t["kind"] != "webhook" or not t["enabled"]:
                     self.send_response(404); self.end_headers(); return

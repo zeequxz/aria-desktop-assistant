@@ -38,7 +38,7 @@ def run_smoke() -> int:
     # trip load_history()'s cap (and pollute the user's real Evals chart).
     config.app_dir = lambda _d=tmp: (_d.mkdir(parents=True, exist_ok=True) or _d)
     config._cache = None
-    db._conn = None
+    db._reset()
 
     db.init()
     ok = True
@@ -531,6 +531,69 @@ def run_smoke() -> int:
     check("stop_loops disables the chat's loops",
           automation_service.stop_loops(_lchat["id"]) == 1
           and automation_service.loops_for_chat(_lchat["id"]) == [])
+
+    # ── v2.2.0: reliability / observability / concurrency ─────────────────────
+    from aria2.core import db as _dbm, logs as _logs
+    from aria2.core.ids import new_id as _nid
+    from aria2.models import base as _mbase
+
+    class _RL(Exception):
+        status_code = 429
+    check("is_retryable flags 429/5xx but not generic errors",
+          _mbase.is_retryable(_RL()) is True
+          and _mbase.is_retryable(ValueError("bad api key")) is False)
+    check("retry_sleep grows with attempt and is bounded",
+          _mbase.retry_sleep(0) < _mbase.retry_sleep(3) <= 21)
+    check("logs.j renders structured JSON",
+          '"event": "x"' in _logs.j("x", a=1) and '"a": 1' in _logs.j("x", a=1))
+
+    # Crash recovery: an orphaned 'running' run becomes 'interrupted'.
+    _orphan = _nid("run")
+    _dbm.insert("runs", {"id": _orphan, "kind": "chat", "status": "running",
+                         "agent_id": a["id"], "project_id": p["id"], "chat_id": None,
+                         "parent_run_id": None, "trigger_id": None, "title": "orphan",
+                         "budget_usd": 0, "cost_usd": 0, "token_total": 0,
+                         "forked_from_run_id": None, "forked_from_step": None,
+                         "started_at": now_ms()})
+    _dbm._reconcile_interrupted_runs()
+    check("crash recovery marks orphaned 'running' runs 'interrupted'",
+          _dbm.one("SELECT status FROM runs WHERE id=?", (_orphan,))["status"]
+          == "interrupted")
+
+    # Prompt version history + rollback.
+    _pa = agent_service.create("PromptTest", "original prompt")
+    agent_service.update(_pa["id"], {"system_prompt": "revised prompt"}, note="t")
+    check("system-prompt update snapshots the old version + bumps version",
+          agent_service.get(_pa["id"])["version"] == 2
+          and any(v["system_prompt"] == "original prompt"
+                  for v in agent_service.prompt_versions(_pa["id"])))
+    agent_service.rollback_prompt(_pa["id"], 1)
+    check("rollback_prompt restores a previous system prompt",
+          agent_service.get(_pa["id"])["system_prompt"] == "original prompt")
+    agent_service.delete(_pa["id"])
+
+    # Thread-local DB: concurrent reads + writes from many threads, no errors.
+    import threading as _th2
+    _cc_errs: list = []
+
+    def _ccworker(i):
+        try:
+            for _ in range(20):
+                _dbm.insert("observations", {"id": _nid("obs"), "kind": "cctest",
+                            "project_id": p["id"], "signature": str(i),
+                            "data_json": "{}", "created_at": now_ms()})
+                _dbm.all("SELECT COUNT(*) FROM observations")
+        except Exception as e:
+            _cc_errs.append(repr(e))
+    _ccts = [_th2.Thread(target=_ccworker, args=(i,)) for i in range(4)]
+    for t in _ccts:
+        t.start()
+    for t in _ccts:
+        t.join()
+    check("thread-local DB: 4 threads concurrent read+write, no errors",
+          not _cc_errs
+          and _dbm.one("SELECT COUNT(*) n FROM observations WHERE kind='cctest'")["n"]
+          == 80)
 
     config.set_key("telegram_allowlist", [])  # reset
 

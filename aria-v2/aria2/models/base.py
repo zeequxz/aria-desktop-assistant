@@ -64,3 +64,25 @@ class Provider(Protocol):
 def estimate_tokens(text: str) -> int:
     """Cheap, provider-agnostic token estimate (~4 chars/token)."""
     return max(1, len(text) // 4)
+
+
+# ── Transient-failure retry (rate limits / 5xx / network blips) ──────────────
+
+def is_retryable(e: Exception) -> bool:
+    """True for transient provider errors worth retrying (429, 5xx, overloaded,
+    connection/timeout) — not for auth/4xx errors, which won't get better."""
+    name = type(e).__name__.lower()
+    if any(k in name for k in ("ratelimit", "overloaded", "timeout",
+                               "apiconnection", "connectionerror", "serviceunavailable",
+                               "internalserver")):
+        return True
+    code = getattr(e, "status_code", None)
+    if code is None:
+        code = getattr(getattr(e, "response", None), "status_code", None)
+    return code in (429, 500, 502, 503, 504)
+
+
+def retry_sleep(attempt: int, base: float = 1.0, cap: float = 20.0) -> float:
+    """Exponential backoff with jitter for retry attempt `attempt` (0-based)."""
+    import random
+    return min(cap, base * (2 ** attempt)) + random.random()
