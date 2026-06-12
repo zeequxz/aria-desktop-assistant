@@ -123,6 +123,18 @@ def run_smoke() -> int:
     finally:
         _reg0.for_settings = _save0
 
+    # Consolidation: near-duplicate memories (same terms, different wording) merge;
+    # exact dupes are already prevented at write time, so use a near-dup pair.
+    memory_service.remember("the deploy key is stored in vault",
+                            scope="agent", scope_id="dedup")
+    memory_service.remember("the deploy key is stored in the vault",
+                            scope="agent", scope_id="dedup")
+    _before = len(memory_service.list_memories("agent", "dedup"))
+    _merged = memory_service.consolidate("agent", "dedup")
+    _after = len(memory_service.list_memories("agent", "dedup"))
+    check("consolidate merges near-duplicate memories (keeps one)",
+          _before == 2 and _merged == 1 and _after == 1)
+
     # Knowledge ingest + search
     knowledge_service.ingest_text(p["id"], "arch.md",
                                   "The run engine streams tokens over an event bus "

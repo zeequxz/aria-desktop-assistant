@@ -354,6 +354,9 @@ class Scheduler:
             n = memory_service.decay()
             if n:
                 log.info(logs.j("memory_decay", removed=n))
+            merged = memory_service.consolidate_all()
+            if merged:
+                log.info(logs.j("memory_consolidate", merged=merged))
         except Exception:
             log.exception(logs.j("memory_decay_failed"))
 

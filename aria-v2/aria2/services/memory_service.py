@@ -322,6 +322,56 @@ def reembed_all() -> int:
     return len(rows)
 
 
+def consolidate(scope: str, scope_id: str = "", sim_threshold: float = 0.92,
+                lex_threshold: float = 0.8) -> int:
+    """Merge near-duplicate memories in a scope (reflection + repeated 'remember's
+    accrue overlap over time). Keeps the first occurrence, retracts later
+    duplicates (superseded_by the survivor), and lifts the survivor's importance
+    to the max of the pair (a repeated fact is a corroborated one). A pair is a
+    duplicate if embedding cosine ≥ sim_threshold OR token-Jaccard ≥ lex_threshold.
+    Returns how many were merged away."""
+    rows = db.all(
+        "SELECT * FROM memories WHERE scope=? AND scope_id=? AND retracted=0 "
+        "ORDER BY created_at", (scope, scope_id),
+    )
+    if len(rows) < 2:
+        return 0
+    survivors: list[tuple] = []  # (row, vec, tokens)
+    removed = 0
+    for r in rows:
+        rv = embeddings.unpack(r["embedding"])
+        rtoks = _tokens(r["text"])
+        match = None
+        for s, sv, st in survivors:
+            cos = (embeddings.cosine(rv, sv) if rv and sv and len(rv) == len(sv)
+                   else 0.0)
+            union = rtoks | st
+            lex = len(rtoks & st) / len(union) if union else 0.0
+            if cos >= sim_threshold or lex >= lex_threshold:
+                match = s
+                break
+        if match is None:
+            survivors.append((r, rv, rtoks))
+            continue
+        db.update("memories", r["id"], {"retracted": 1, "superseded_by": match["id"]})
+        if (r["importance"] or 0) > (match["importance"] or 0):
+            db.update("memories", match["id"], {"importance": r["importance"]})
+        removed += 1
+    if removed:
+        db.insert("audit_log", {
+            "id": new_id("aud"), "actor": "engine", "action": "memory.consolidate",
+            "target": f"{scope}:{scope_id}", "detail_json": json.dumps({"merged": removed}),
+            "run_id": None, "created_at": now_ms(),
+        })
+    return removed
+
+
+def consolidate_all() -> int:
+    """Consolidate every (scope, scope_id) that has memories. Housekeeping."""
+    scopes = db.all("SELECT DISTINCT scope, scope_id FROM memories WHERE retracted=0")
+    return sum(consolidate(s["scope"], s["scope_id"] or "") for s in scopes)
+
+
 def decay() -> int:
     cutoff = now_ms() - 60 * 24 * 3600 * 1000
     stale = db.all(
