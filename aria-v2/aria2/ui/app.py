@@ -228,8 +228,9 @@ class ARIAApp(ctk.CTk):
             brand, text="✦ ARIA", font=(theme.FONT, 22, "bold"),
             text_color=theme.accent()
         ).pack(anchor="w")
+        import aria2 as _aria2
         ctk.CTkLabel(
-            brand, text="AI Workstation v2", font=theme.f(-2),
+            brand, text=f"AI Workstation  ·  v{_aria2.__version__}", font=theme.f(-2),
             text_color=theme.TEXT_FAINT
         ).pack(anchor="w", pady=(0, 0))
 
@@ -372,22 +373,60 @@ class ARIAApp(ctk.CTk):
         self._update_banner.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
 
     def _open_update(self):
+        """Clicking the sidebar update banner now RUNS the update (download +
+        install + restart) — not just opens Settings. From source (no .exe to
+        replace) it shows the Updates panel instead."""
         if not self._update_info:
             return
-        self.show("settings")  # Settings → Updates has the version + install button
+        from aria2.services import update_service
+        info = self._update_info
+        if not update_service.is_frozen():
+            self._open_update_settings(info)
+            return
+        from tkinter import messagebox
+        if not messagebox.askyesno(
+                "Update ARIA",
+                f"Download and install v{info.get('version','?')} now?\n\n"
+                "ARIA will close and restart automatically.", parent=self):
+            return
+
+        def worker():
+            res = update_service.download_and_install(
+                info.get("url", ""), sha256=info.get("sha256"),
+                on_status=lambda m: self.after(0, lambda: self._update_banner.configure(
+                    text=f"⏳ {m}")))
+            if res.get("ok") and res.get("relaunch"):
+                self.after(0, self._quit_for_update)
+            else:
+                self.after(0, lambda: self._update_banner.configure(
+                    text=f"⚠ Update failed — open Settings",
+                    command=lambda: self._open_update_settings(info)))
+
+        self._update_banner.configure(text="⏳ Starting update…", command=lambda: None)
+        threading.Thread(target=worker, daemon=True, name="self-update").start()
+
+    def _quit_for_update(self):
+        self._update_banner.configure(text="↻ Restarting…")
+        try:
+            self._real_quit()
+        except Exception:
+            pass
+        import os
+        os._exit(0)
+
+    def _open_update_settings(self, info: dict):
+        self.show("settings")
         sv = self._views.get("settings")
         if sv is not None and hasattr(sv, "_show_update"):
             import aria2
-            # Pre-populate the panel with what the banner found, so the user can
-            # hit "Update & restart" straight away (no second "Check now").
             try:
                 sv._show_update({
                     "status": "update",
-                    "current": self._update_info.get("current", aria2.__version__),
-                    "version": self._update_info.get("version", ""),
-                    "url": self._update_info.get("url", ""),
-                    "notes": self._update_info.get("notes", ""),
-                    "sha256": self._update_info.get("sha256", ""),
+                    "current": info.get("current", aria2.__version__),
+                    "version": info.get("version", ""),
+                    "url": info.get("url", ""),
+                    "notes": info.get("notes", ""),
+                    "sha256": info.get("sha256", ""),
                 })
             except Exception:
                 pass

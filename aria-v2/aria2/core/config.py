@@ -147,6 +147,12 @@ DEFAULTS: dict = {
     "default_tool_policy": "ask",
     # Computer use: allow mouse/keyboard/screen tools (high risk; default off).
     "computer_use_enabled": False,
+    # Where run_shell executes:  host = directly (working dir pinned, default) |
+    # docker = throwaway container (only the project dir mounted, no network) |
+    # wsl = the WSL Linux subsystem. docker/wsl give real isolation but must be
+    # installed. Destructive commands always require approval regardless.
+    "exec_backend": "host",
+    "exec_docker_image": "python:3.12-slim",
     # ── Messaging (Telegram bridge) ─────────────────────────────────────────
     "messaging_enabled": False,
     "telegram_bot_token": "",

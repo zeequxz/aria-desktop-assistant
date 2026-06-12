@@ -56,12 +56,50 @@ def _exec(cmd, cwd: str | None, timeout: int, shell: bool) -> dict:
         return {"error": str(e)}
 
 
+def _backend() -> str:
+    try:
+        from aria2.core import config
+        return config.get("exec_backend", "host") or "host"
+    except Exception:
+        return "host"
+
+
+def wrap_isolated(command: str, cwd: str | None, backend: str):
+    """Wrap `command` to run inside an isolation backend. Returns (cmd, shell).
+
+      docker → run in a throwaway container: only the project dir is mounted,
+               no network, capped CPU/RAM. Real isolation; needs Docker + image.
+      wsl    → run in the WSL Linux subsystem (separate process space / FS).
+      host   → run directly (default; the working dir is still pinned)."""
+    # Docker/WSL want forward-slash paths even on Windows.
+    posix = (Path(cwd) if cwd else Path.cwd()).as_posix()
+    if backend == "docker":
+        try:
+            from aria2.core import config
+            image = config.get("exec_docker_image", "python:3.12-slim")
+        except Exception:
+            image = "python:3.12-slim"
+        argv = ["docker", "run", "--rm", "--network=none",
+                "--memory=512m", "--cpus=1",
+                "-v", f"{posix}:/work", "-w", "/work",
+                image, "sh", "-c", command]
+        return argv, False
+    if backend == "wsl":
+        inner = f"cd \"$(wslpath -u '{posix}')\" 2>/dev/null; {command}"
+        return ["wsl.exe", "bash", "-lc", inner], False
+    return command, True
+
+
 def run_command(
     command: str,
     cwd: str | None = None,
     timeout: int = 60,
     shell: bool = True,
 ) -> dict:
+    backend = _backend()
+    if backend in ("docker", "wsl"):
+        cmd, shell = wrap_isolated(command, cwd, backend)
+        return _exec(cmd, cwd, timeout, shell)
     return _exec(command, cwd, timeout, shell)
 
 

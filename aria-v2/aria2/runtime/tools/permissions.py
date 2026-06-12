@@ -38,15 +38,38 @@ def resolve_policy(tool_name: str, agent_scopes: dict, tool_default: str) -> str
     return config.get("default_tool_policy", "ask")
 
 
+_SHELL_TOOLS = {"run_shell", "run_python"}
+
+
+def _danger(tool_name: str, tool_input: dict) -> str:
+    """Reason string if a shell/python tool call is obviously destructive, else ''."""
+    if tool_name not in _SHELL_TOOLS:
+        return ""
+    from aria2.runtime.tools import command_safety
+    payload = tool_input.get("command") or tool_input.get("code") or ""
+    bad, reason = command_safety.is_dangerous(str(payload))
+    return reason if bad else ""
+
+
 def check(tool_name: str, tool_input: dict, agent_scopes: dict, tool_default: str) -> tuple[bool, str]:
     """Return (allowed, reason)."""
     policy = resolve_policy(tool_name, agent_scopes, tool_default)
+    # Destructive shell/python is NEVER run silently: force an approval even when
+    # policy is "allow" (auto/accept mode). With no approver — Telegram bridge,
+    # automations — "ask" resolves to deny, which is the safe default.
+    danger = _danger(tool_name, tool_input)
+    if danger and policy == "allow":
+        policy = "ask"
     if policy == "allow":
         return True, "allowed"
     if policy == "deny":
         return False, "denied by policy"
     # ask
     if _approver is None:
-        return False, "approval required but no approver registered"
-    approved = _approver(tool_name, tool_input, f"Run tool '{tool_name}'?")
+        return (False, f"blocked dangerous command ({danger}); approval required "
+                       "but no approver" if danger else
+                       "approval required but no approver registered")
+    prompt = (f"⚠ This looks dangerous ({danger}). Run tool '{tool_name}'?"
+              if danger else f"Run tool '{tool_name}'?")
+    approved = _approver(tool_name, tool_input, prompt)
     return (approved, "user approved" if approved else "user declined")
