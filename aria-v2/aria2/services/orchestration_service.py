@@ -35,8 +35,8 @@ from aria2.core.events import bus
 from aria2.core.ids import new_id, now_ms
 
 _ROLE_AGENT = {
-    "researcher": "researcher", "coder": "coder", "reviewer": "coder",
-    "tester": "coder", "writer": "writer", "planner": "assistant",
+    "researcher": "researcher", "coder": "coder", "reviewer": "reviewer",
+    "tester": "tester", "writer": "writer", "planner": "assistant",
     "generalist": "assistant",
 }
 
@@ -78,6 +78,8 @@ def parse_plan(text: str) -> list[dict]:
         expects = t.get("expects") or t.get("must_contain") or []
         if isinstance(expects, str):
             expects = [expects]
+        schema = t.get("schema") if isinstance(t.get("schema"), dict) else {}
+        risk = str(t.get("risk") or "").lower().strip()
         out.append({
             "ordinal": int(t.get("id", i) or i),
             "title": str(t.get("title") or t.get("task") or f"Task {i}")[:120],
@@ -85,12 +87,22 @@ def parse_plan(text: str) -> list[dict]:
                                or t.get("task") or t.get("title") or ""),
             "role": str(t.get("role") or t.get("agent") or "generalist"),
             "depends_on": [int(x) for x in deps if str(x).strip().lstrip("-").isdigit()],
+            "risk": "high" if risk in ("high", "danger", "destructive") else "",
             "contract": {
                 "expects": [str(x) for x in expects if str(x).strip()][:8],
                 "format": str(t.get("format") or "").lower().strip(),
+                "schema": schema,
             },
         })
     return out
+
+
+def plan_requires_approval(tasks: list[dict], settings: dict) -> bool:
+    """Approval is needed if the user always wants it, OR the plan contains a
+    step the planner flagged high-risk (risk-aware escalation)."""
+    if bool(settings.get("orchestration_plan_approval", False)):
+        return True
+    return any((t.get("risk") or "") == "high" for t in tasks)
 
 
 def topo_order(tasks: list[dict]) -> list[dict]:
@@ -136,9 +148,83 @@ def waves(tasks: list[dict]) -> list[list[dict]]:
 
 # ── Deliverable contracts + review verdicts (deterministic, unit-tested) ─────
 
+def _extract_json(out: str):
+    """Best-effort parse of a JSON value from model output (fenced or inline)."""
+    body = out
+    m = re.search(r"```(?:json)?\s*(.+?)```", out, re.S)
+    if m:
+        body = m.group(1)
+    body = body.strip()
+    try:
+        return json.loads(body), True
+    except Exception:
+        # Fall back to the outermost {...} / [...] span.
+        for op, cl in (("{", "}"), ("[", "]")):
+            a, b = body.find(op), body.rfind(cl)
+            if a != -1 and b > a:
+                try:
+                    return json.loads(body[a:b + 1]), True
+                except Exception:
+                    pass
+    return None, False
+
+
+_JSON_TYPES = {
+    "object": dict, "array": list, "string": str, "number": (int, float),
+    "integer": int, "boolean": bool, "null": type(None),
+}
+
+
+def validate_schema(value, schema: dict, path: str = "$") -> str:
+    """Validate `value` against a small JSON-Schema subset. Returns "" if valid,
+    else the first violation as a human reason. Supports: type, required,
+    properties, items, enum, minimum/maximum, minLength, minItems."""
+    if not isinstance(schema, dict) or not schema:
+        return ""
+    t = schema.get("type")
+    if t:
+        types = t if isinstance(t, list) else [t]
+        py = tuple(_JSON_TYPES[x] for x in types if x in _JSON_TYPES)
+        # bool is a subclass of int — exclude it when only number/integer asked.
+        if py and (isinstance(value, bool) and bool not in py
+                   and any(x in ("number", "integer") for x in types)):
+            return f"{path}: expected {t}, got boolean"
+        if py and not isinstance(value, py):
+            return f"{path}: expected {t}, got {type(value).__name__}"
+    if "enum" in schema and value not in schema["enum"]:
+        return f"{path}: {value!r} not in enum"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            return f"{path}: {value} < minimum {schema['minimum']}"
+        if "maximum" in schema and value > schema["maximum"]:
+            return f"{path}: {value} > maximum {schema['maximum']}"
+    if isinstance(value, str) and "minLength" in schema and len(value) < schema["minLength"]:
+        return f"{path}: shorter than minLength {schema['minLength']}"
+    if isinstance(value, dict):
+        for key in schema.get("required", []):
+            if key not in value:
+                return f"{path}: missing required property '{key}'"
+        for key, sub in (schema.get("properties") or {}).items():
+            if key in value:
+                r = validate_schema(value[key], sub, f"{path}.{key}")
+                if r:
+                    return r
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            return f"{path}: fewer than minItems {schema['minItems']}"
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for idx, item in enumerate(value):
+                r = validate_schema(item, item_schema, f"{path}[{idx}]")
+                if r:
+                    return r
+    return ""
+
+
 def validate_deliverable(output: str, contract: dict | None) -> tuple[bool, str]:
     """Check a task's output against its contract. Returns (ok, reason). Always
-    requires non-empty output; optionally requires keywords / valid JSON."""
+    requires non-empty output; optionally requires keywords, valid JSON, and
+    conformance to a JSON-Schema subset."""
     out = output or ""
     if not out.strip():
         return False, "empty output"
@@ -147,15 +233,16 @@ def validate_deliverable(output: str, contract: dict | None) -> tuple[bool, str]
     missing = [k for k in expects if k and k.lower() not in out.lower()]
     if missing:
         return False, "missing required: " + ", ".join(missing)
-    if (c.get("format") or "").lower() == "json":
-        body = out
-        m = re.search(r"```(?:json)?\s*(.+?)```", out, re.S)
-        if m:
-            body = m.group(1)
-        try:
-            json.loads(body.strip())
-        except Exception:
+    schema = c.get("schema") or {}
+    want_json = (c.get("format") or "").lower() == "json" or bool(schema)
+    if want_json:
+        value, ok = _extract_json(out)
+        if not ok:
             return False, "output is not valid JSON"
+        if schema:
+            reason = validate_schema(value, schema)
+            if reason:
+                return False, "schema: " + reason
     return True, ""
 
 
@@ -252,10 +339,12 @@ def _orchestrate(goal, project, agent, chat_id, leader_run_id):
     try:
         _say(chat_id, leader_run_id, f"🧭 **Project Leader** — planning: {goal}")
         tasks = _plan_phase(goal, project, agent, chat_id, leader_run_id, settings)
-        if bool(settings.get("orchestration_plan_approval", False)):
+        if plan_requires_approval(tasks, settings):
             db.update("runs", leader_run_id, {"status": "awaiting_approval"})
+            why = ("" if bool(settings.get("orchestration_plan_approval", False))
+                   else " (this plan has a high-risk step)")
             _say(chat_id, leader_run_id,
-                 "⏸ **Awaiting approval.** Reply `/team go` to run this plan, "
+                 f"⏸ **Awaiting approval.**{why} Reply `/team go` to run this plan, "
                  "or `/team cancel` to discard it.")
             return
         _run_phase(goal, project, agent, chat_id, leader_run_id, settings, tasks)
@@ -270,12 +359,13 @@ def _plan_phase(goal, project, agent, chat_id, leader_run_id, settings) -> list[
     plan = _plan(goal, project, agent, settings)
     if not plan:  # planner failed → run the goal as a single task
         plan = [{"ordinal": 1, "title": goal[:120], "description": goal,
-                 "role": "generalist", "depends_on": [], "contract": {}}]
+                 "role": "generalist", "depends_on": [], "risk": "", "contract": {}}]
     tasks = _persist_tasks(leader_run_id, plan)
     bus.publish("orchestration.plan", {"leader_run_id": leader_run_id,
                                        "tasks": [t["title"] for t in tasks]})
     _say(chat_id, leader_run_id, "📋 **Plan**\n" + "\n".join(
-        f"  {t['ordinal']}. [{t['role']}] {t['title']}" for t in tasks))
+        f"  {t['ordinal']}. [{t['role']}] {t['title']}"
+        f"{'  ⚠ high-risk' if t.get('risk') == 'high' else ''}" for t in tasks))
     return tasks
 
 
@@ -336,6 +426,7 @@ def _persist_tasks(leader_run_id: str, plan: list[dict]) -> list[dict]:
             "agent_id": role_to_agent(t["role"]),
             "depends_on": json.dumps(t["depends_on"]),
             "contract": json.dumps(t.get("contract") or {}),
+            "risk": t.get("risk") or "", "revisions": 0,
             "status": "pending", "run_id": None, "output": None,
             "created_at": now_ms(), "updated_at": now_ms(),
         })
@@ -363,6 +454,7 @@ def _run_one(task, prior_outputs, project, settings, leader_run_id, chat_id,
     out, ok = _run_task(task, prior_outputs, project, settings, leader_run_id)
 
     review_notes = ""
+    revisions = 0
     if ok and auto_review and (task.get("role") or "").lower() == "coder":
         attempt = 0
         while True:
@@ -371,6 +463,7 @@ def _run_one(task, prior_outputs, project, settings, leader_run_id, chat_id,
             if (verdict == "approve" and cv_ok) or attempt >= max_rev:
                 break
             attempt += 1
+            revisions = attempt
             feedback = review_notes if verdict == "revise" else \
                 f"Deliverable check failed: {cv_reason}"
             _say(chat_id, leader_run_id, f"↻ Revising step {o} (round {attempt})…")
@@ -385,10 +478,11 @@ def _run_one(task, prior_outputs, project, settings, leader_run_id, chat_id,
     ok = ok and cv_ok
     db.update("tasks", task["id"], {"status": "done" if ok else "failed",
                                     "output": (out or "")[:4000],
-                                    "updated_at": now_ms()})
+                                    "revisions": revisions, "updated_at": now_ms()})
     tail = "" if ok else f" — {cv_reason}"
+    rev_s = f" (after {revisions} revision{'s' if revisions != 1 else ''})" if revisions else ""
     _say(chat_id, leader_run_id,
-         f"{'✓' if ok else '✗'} Step {o} {'done' if ok else 'failed'}{tail}")
+         f"{'✓' if ok else '✗'} Step {o} {'done' if ok else 'failed'}{rev_s}{tail}")
     return o, out, ok
 
 
@@ -396,7 +490,8 @@ def _review(task, output, project, settings) -> tuple[str, str]:
     """One-shot reviewer pass. Returns (verdict, notes) where verdict is
     'approve' | 'revise'."""
     from aria2.services import agent_service
-    reviewer = agent_service.get("coder") or agent_service.get("assistant")
+    reviewer = (agent_service.get("reviewer") or agent_service.get("coder")
+                or agent_service.get("assistant"))
     sys = ("You are a senior reviewer. Review the work below for correctness, "
            "bugs, and security. START your reply with APPROVE (if it is solid) or "
            "REVISE (if it needs changes), then 1-3 sentences of specifics.")
@@ -470,8 +565,11 @@ def _plan(goal, project, agent, settings) -> list[dict]:
            'item: {"id": int, "title": str, "description": str, "role": '
            '"researcher"|"coder"|"reviewer"|"tester"|"writer"|"generalist", '
            '"depends_on": [ids of earlier tasks], "expects": [optional keywords '
-           'the deliverable MUST contain], "format": "json" (optional, if the '
-           'deliverable must be valid JSON)}.')
+           'the deliverable MUST contain], "format": "json" (optional), "schema": '
+           '{optional JSON-Schema the JSON output must satisfy}, "risk": "high" '
+           '(only if the step does something destructive/irreversible, e.g. '
+           'deleting files or changing system state)}. Use the "tester" role for '
+           'verification steps and "reviewer" for critique steps.')
     return parse_plan(_oneshot(sys, goal, settings, agent))
 
 

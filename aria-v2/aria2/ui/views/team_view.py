@@ -116,9 +116,12 @@ class TeamView(ctk.CTkFrame):
             top.pack(fill="x", padx=12, pady=(8, 2))
             deps = t.get("depends_on") or "[]"
             dep_s = f"  ← {deps}" if deps not in ("[]", "", None) else ""
-            ctk.CTkLabel(top, text=f"{icon}  {t['ordinal']}. {t['title']}",
+            rev = t.get("revisions") or 0
+            rev_s = f"  ↻{rev}" if rev else ""
+            risk_s = "  ⚠" if (t.get("risk") or "") == "high" else ""
+            ctk.CTkLabel(top, text=f"{icon}  {t['ordinal']}. {t['title']}{risk_s}",
                          font=theme.f(0, "bold"), text_color=color, anchor="w").pack(side="left")
-            ctk.CTkLabel(top, text=f"[{t.get('role','')}]{dep_s}", font=theme.f(-2),
+            ctk.CTkLabel(top, text=f"[{t.get('role','')}]{rev_s}{dep_s}", font=theme.f(-2),
                          text_color=theme.TEXT_FAINT).pack(side="right")
             preview = (t.get("output") or "")[:280]
             if preview:

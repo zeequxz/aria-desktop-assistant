@@ -127,5 +127,8 @@ def migrate(conn: sqlite3.Connection) -> None:
             updated_at    INTEGER)"""
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_leader ON tasks(leader_run_id)")
-    # Deliverable contract per task: {"expects": [keywords], "format": "json"|""}.
+    # Deliverable contract per task: {"expects":[kw], "format":"json", "schema":{}}.
     _add_column(conn, "tasks", "contract", "TEXT DEFAULT '{}'")
+    # Stage 4: revision count (review→re-run rounds) + planner-tagged risk level.
+    _add_column(conn, "tasks", "revisions", "INTEGER DEFAULT 0")
+    _add_column(conn, "tasks", "risk", "TEXT DEFAULT ''")

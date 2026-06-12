@@ -880,8 +880,12 @@ def run_smoke() -> int:
     check("role_to_agent maps specialist roles to built-in agents",
           _orch.role_to_agent("researcher") == "researcher"
           and _orch.role_to_agent("coder") == "coder"
-          and _orch.role_to_agent("reviewer") == "coder"
+          and _orch.role_to_agent("reviewer") == "reviewer"
+          and _orch.role_to_agent("tester") == "tester"
           and _orch.role_to_agent("unknown") == "assistant")
+    check("reviewer + tester are seeded as built-in agents",
+          (agent_service.get("reviewer") or {}).get("id") == "reviewer"
+          and (agent_service.get("tester") or {}).get("id") == "tester")
 
     # Full leader run with a stubbed planner + a fake provider for specialists/merge.
     from aria2.models import registry as _oreg
@@ -949,7 +953,7 @@ def run_smoke() -> int:
           and _orch.review_verdict("") == "approve")
     check("parse_plan captures expects + json format into a contract",
           _orch.parse_plan('[{"id":1,"title":"T","expects":["foo"],"format":"json"}]')
-          [0]["contract"] == {"expects": ["foo"], "format": "json"})
+          [0]["contract"] == {"expects": ["foo"], "format": "json", "schema": {}})
 
     # Stage 3: revision loop (reviewer rejects once, then approves → coder re-runs)
     # and honest contract failure (a deliverable missing a required keyword fails).
@@ -1014,6 +1018,65 @@ def run_smoke() -> int:
           and _dbm.one("SELECT status FROM runs WHERE id=?",
                        (_arun,))["status"] == "cancelled"
           and _orch.pending_for_chat(_achat) is None)
+
+    # ── Project Leader Stage 4: JSON-Schema, risk-aware approval, telemetry ────
+    _schema = {"type": "object", "required": ["name", "age"],
+               "properties": {"name": {"type": "string", "minLength": 1},
+                              "age": {"type": "integer", "minimum": 0}}}
+    check("validate_schema enforces type/required/properties/min",
+          _orch.validate_schema({"name": "Ada", "age": 36}, _schema) == ""
+          and _orch.validate_schema({"name": "Ada"}, _schema) != ""          # missing
+          and _orch.validate_schema({"name": "", "age": 36}, _schema) != ""  # minLength
+          and _orch.validate_schema({"name": "Ada", "age": -1}, _schema) != ""  # minimum
+          and _orch.validate_schema({"name": "Ada", "age": "x"}, _schema) != "")  # type
+    check("validate_schema rejects a boolean where a number is required",
+          _orch.validate_schema(True, {"type": "integer"}) != "")
+    check("validate_deliverable runs a contract's JSON-Schema (fenced JSON ok)",
+          _orch.validate_deliverable('```json\n{"name":"Ada","age":36}\n```',
+                                     {"schema": _schema})[0] is True
+          and _orch.validate_deliverable('{"name":"Ada"}', {"schema": _schema})[0] is False
+          and _orch.validate_deliverable("not json", {"schema": _schema})[0] is False)
+    _rp = _orch.parse_plan(
+        '[{"id":1,"title":"wipe","role":"coder","risk":"high",'
+        '"schema":{"type":"object"}}]')[0]
+    check("parse_plan captures risk + JSON-Schema into the task",
+          _rp["risk"] == "high" and _rp["contract"]["schema"] == {"type": "object"})
+    check("plan_requires_approval escalates when a step is high-risk",
+          _orch.plan_requires_approval([{"risk": "high"}], {}) is True
+          and _orch.plan_requires_approval([{"risk": ""}], {}) is False
+          and _orch.plan_requires_approval(
+              [{"risk": ""}], {"orchestration_plan_approval": True}) is True)
+
+    # Revision telemetry: the revisions column is persisted on the task row.
+    _orig_review4, _orig_reg4 = _orch._review, _oreg.for_settings
+    _oreg.for_settings = lambda s, o=None: (_OProv(), "fake")
+    _rc4 = []
+
+    def _fake_review4(task, output, project, settings):
+        _rc4.append(1)
+        return ("revise", "tighten it") if len(_rc4) == 1 else ("approve", "ok")
+    _orch._review = _fake_review4
+    try:
+        _lr4 = _nid("run")
+        _dbm.insert("runs", {"id": _lr4, "kind": "leader", "status": "running",
+                     "agent_id": a["id"], "project_id": p["id"], "chat_id": None,
+                     "parent_run_id": None, "trigger_id": None, "title": "team",
+                     "budget_usd": 0, "cost_usd": 0, "token_total": 0,
+                     "forked_from_run_id": None, "forked_from_step": None,
+                     "started_at": now_ms()})
+        _t4 = _nid("task")
+        _dbm.insert("tasks", {"id": _t4, "leader_run_id": _lr4, "ordinal": 1,
+                     "title": "code", "description": "x", "role": "coder",
+                     "agent_id": "coder", "depends_on": "[]", "contract": "{}",
+                     "risk": "", "revisions": 0, "status": "pending", "run_id": None,
+                     "output": None, "created_at": now_ms(), "updated_at": now_ms()})
+        _td4 = {"id": _t4, "ordinal": 1, "title": "code", "description": "x",
+                "role": "coder", "depends_on": [], "contract": {}}
+        _orch._run_one(_td4, {}, p, _cfg3.load(), _lr4, None, True)
+        check("revision count is persisted to the task's revisions column",
+              _dbm.one("SELECT revisions FROM tasks WHERE id=?", (_t4,))["revisions"] == 1)
+    finally:
+        _orch._review, _oreg.for_settings = _orig_review4, _orig_reg4
 
     from aria2.core import db as _db
     bt = _db.one("PRAGMA busy_timeout")
