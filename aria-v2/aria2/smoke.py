@@ -1189,6 +1189,37 @@ def run_smoke() -> int:
     finally:
         _oreg.for_settings = _save_reg
 
+    # A mid-stream provider error keeps the partial answer that already streamed
+    # (completing the partial-stream recovery story; cancel was handled in 2.12.0).
+    class _ErrMidProv:
+        name = "fake"
+
+        def capabilities(self, m):
+            return _Caps(supports_tools=False, supports_caching=False)
+
+        def count_tokens(self, t):
+            return 1
+
+        def stream(self, model, system, messages, tools=None, max_tokens=4096,
+                   temperature=1.0, cache=True):
+            yield _SEv(type="text", text="here is the answer so")
+            yield _SEv(type="error", error="connection reset")
+
+    _save_reg2 = _oreg.for_settings
+    _oreg.for_settings = lambda s, o=None: (_ErrMidProv(), "fake")
+    try:
+        _eres = _RE(_cfg3.load()).execute(_RReq(
+            agent=a, project=p,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "q"}]}],
+            kind="chat", run_id=_nid("run")))
+        _etext = " ".join(b.get("text", "") for b in _eres.assistant_content
+                          if b.get("type") == "text")
+        check("a mid-stream provider error preserves the partial answer (not lost)",
+              _eres.status == "failed" and "here is the answer so" in _etext
+              and "interrupted" in _etext)
+    finally:
+        _oreg.for_settings = _save_reg2
+
     # Vision tool-results: a tool's _image reaches an image-capable model as an
     # image block, is stripped before storage, and never breaks a text-only model.
     import json as _vjson

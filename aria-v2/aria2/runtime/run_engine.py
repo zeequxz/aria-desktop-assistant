@@ -343,7 +343,16 @@ class RunEngine:
                 elif ev.type == "error":
                     self._finalise(run_id, "failed", error=ev.error, cost=cost_total, tokens=token_total)
                     bus.publish("run.error", {"run_id": run_id, "error": ev.error})
-                    return RunResult(run_id, "failed", f"Error: {ev.error}", cost_total, token_total, assistant_content)
+                    # Preserve any answer that already streamed before the error,
+                    # so a mid-reply network drop doesn't discard what the user
+                    # already saw (mirrors the mid-stream cancel behaviour). Marked
+                    # interrupted so the saved message reads honestly.
+                    if text_buf:
+                        kept = f"{text_buf}\n\n_(interrupted: {ev.error})_"
+                        return RunResult(run_id, "failed", text_buf, cost_total,
+                                         token_total, [{"type": "text", "text": kept}])
+                    return RunResult(run_id, "failed", f"Error: {ev.error}",
+                                     cost_total, token_total, assistant_content)
 
             # Cost accounting for this model turn.
             tin, tout = usage.get("input", 0), usage.get("output", 0)
