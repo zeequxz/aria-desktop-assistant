@@ -283,6 +283,8 @@ class ARIAApp(ctk.CTk):
         """The Ctrl+K command set: jump to any view + a few core actions."""
         cmds = [{"label": f"Go to {label.split('  ', 1)[-1]}", "hint": "view",
                  "action": (lambda k=key: self.show(k))} for key, label, _ in _NAV]
+        from aria2.ui.views.command_palette import slash_command_entries
+        cmds += slash_command_entries(self._cmd_prefill_chat)
         cmds += [
             {"label": "New chat", "hint": "action", "action": self._cmd_new_chat},
             {"label": "New project", "hint": "action",
@@ -292,6 +294,25 @@ class ARIAApp(ctk.CTk):
             {"label": "About ARIA", "hint": "F1", "action": self.open_about},
         ]
         return cmds
+
+    def _cmd_prefill_chat(self, prefix: str):
+        """Open the chat view and prefill its composer with `prefix` (used to make
+        the /team and /loop slash-commands discoverable from the palette)."""
+        self.show("chat")
+
+        def _do():
+            view = self._views.get("chat")
+            inp = getattr(view, "input", None)
+            if inp is None:
+                return
+            try:
+                inp.delete("1.0", "end")
+                inp.insert("1.0", prefix)
+                inp.focus_set()
+                view._autosize_input()
+            except Exception:
+                pass
+        self.after(60, _do)
 
     def rebuild_views(self):
         """Destroy and clear all views so they are reconstructed with the

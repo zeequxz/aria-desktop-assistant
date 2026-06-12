@@ -1417,6 +1417,14 @@ def run_smoke() -> int:
     check("command palette filters + ranks matches",
           r and r[0]["label"] == "New project")
     check("empty query returns the command list", len(filter_commands(cmds, "")) == 4)
+    # /team and /loop are discoverable via the palette; selecting one prefills chat.
+    from aria2.ui.views.command_palette import slash_command_entries
+    _pf = []
+    _slash = slash_command_entries(lambda p: _pf.append(p))
+    check("palette surfaces /team + /loop and they prefill the composer",
+          any("/team" in e["label"] for e in _slash)
+          and any("/loop" in e["label"] for e in _slash)
+          and [e["action"]() or _pf[-1] for e in _slash] and _pf == ["/team ", "/loop "])
     check("provider_configured: local is always ready",
           config.provider_configured({"provider": "local"}))
     check("provider_configured: claude needs a key",

@@ -12,6 +12,18 @@ import customtkinter as ctk
 from aria2.ui import theme
 
 
+def slash_command_entries(prefill) -> list[dict]:
+    """Palette entries that surface the chat slash-commands so they're
+    discoverable via Ctrl+K. Selecting one focuses the composer prefilled with the
+    command; `prefill(text)` is supplied by the app."""
+    return [
+        {"label": "Run a team task  (/team)", "hint": "multi-agent",
+         "action": lambda: prefill("/team ")},
+        {"label": "Schedule a loop  (/loop)", "hint": "recurring",
+         "action": lambda: prefill("/loop ")},
+    ]
+
+
 def filter_commands(commands: list[dict], query: str, limit: int = 8) -> list[dict]:
     """Rank commands by a simple, predictable scheme: prefix > word-start >
     substring, across label+hint. Empty query returns the first `limit`."""
