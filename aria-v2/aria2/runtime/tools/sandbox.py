@@ -32,6 +32,11 @@ def _exec(cmd, cwd: str | None, timeout: int, shell: bool) -> dict:
     workdir = Path(cwd) if cwd else Path.cwd()
     if not workdir.exists():
         return {"error": f"Working directory does not exist: {workdir}"}
+    # Force child processes into UTF-8: PYTHONUTF8/PYTHONIOENCODING make a child
+    # *emit* UTF-8 (otherwise a child python crashes trying to print non-ASCII
+    # under the Windows cp1252 console codec), and we *decode* as UTF-8 below.
+    # Together this makes non-ASCII output work instead of crashing/mojibaking.
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     try:
         proc = subprocess.run(
             cmd,
@@ -39,6 +44,9 @@ def _exec(cmd, cwd: str | None, timeout: int, shell: bool) -> dict:
             cwd=str(workdir),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
             timeout=timeout,
             **procutil.NO_WINDOW,
         )
@@ -118,9 +126,11 @@ def run_command_background(command: str, cwd: str | None = None) -> dict:
         kwargs = {}
         if os.name == "nt":
             kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW (no console flash)
+        env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
         proc = subprocess.Popen(
             command, shell=True, cwd=str(workdir),
-            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **kwargs,
+            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            env=env, **kwargs,
         )
         log.close()  # the child holds its own dup of the fd
         _bg_procs.append((proc.pid, proc, str(log_path)))
@@ -153,6 +163,24 @@ def terminate_background() -> int:
     return n
 
 
+def _python_exe() -> str | None:
+    """Path to a real Python interpreter for run_python.
+
+    In a normal install sys.executable IS python. But in the PyInstaller-frozen
+    app, sys.executable is ARIA2.exe — running a script with it would relaunch
+    ARIA, not run the code. So when frozen we look for a real interpreter on PATH.
+    Returns None if none is available (run_python then fails with a clear hint)."""
+    import shutil
+    import sys
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    for name in ("python", "python3", "py"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
 def run_python(code: str, cwd: str | None = None, timeout: int = 60) -> dict:
     """Run a Python snippet in a subprocess (never in-process).
 
@@ -162,14 +190,18 @@ def run_python(code: str, cwd: str | None = None, timeout: int = 60) -> dict:
     correctly regardless of their contents. No shell is involved.
     """
     import os
-    import sys
     import tempfile
 
+    exe = _python_exe()
+    if exe is None:
+        return {"error": "No Python interpreter found on PATH. Install Python "
+                "(python.org) to use run_python, or use run_shell instead.",
+                "missing_python": True}
     fd, path = tempfile.mkstemp(suffix=".py", prefix="aria_py_")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(code)
-        return _exec([sys.executable, path], cwd, timeout, shell=False)
+        return _exec([exe, path], cwd, timeout, shell=False)
     finally:
         try:
             os.unlink(path)

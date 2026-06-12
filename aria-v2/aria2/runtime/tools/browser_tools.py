@@ -11,6 +11,7 @@ from __future__ import annotations
 import html
 import re
 import webbrowser
+from urllib.parse import parse_qs, unquote, urlparse
 
 from aria2.runtime.tools.base import Tool
 
@@ -32,6 +33,23 @@ def _strip_html(raw: str) -> str:
     return _WS.sub(" ", html.unescape(text)).strip()
 
 
+def _clean_ddg(href: str) -> str:
+    """DuckDuckGo's HTML results wrap every link in a redirect
+    (//duckduckgo.com/l/?uddg=<urlencoded-real-url>). Unwrap it so callers get a
+    clean, directly-usable destination URL instead of a tracker redirect."""
+    href = html.unescape(href or "")
+    if "uddg=" in href:
+        try:
+            target = parse_qs(urlparse(href).query).get("uddg", [""])[0]
+            if target:
+                return unquote(target)
+        except Exception:
+            pass
+    if href.startswith("//"):
+        return "https:" + href
+    return href
+
+
 def make_browser_tools() -> list[Tool]:
     def fetch_url(url: str, max_chars: int = 6000) -> dict:
         if not AVAILABLE:
@@ -42,8 +60,9 @@ def make_browser_tools() -> list[Tool]:
             r.raise_for_status()
             ctype = r.headers.get("Content-Type", "")
             body = r.text if "html" in ctype or "text" in ctype else "(binary content)"
+            text = _strip_html(body)
             return {"url": url, "status": r.status_code,
-                    "text": _strip_html(body)[:max_chars]}
+                    "text": text[:max_chars], "truncated": len(text) > max_chars}
         except Exception as e:
             return {"error": str(e)}
 
@@ -58,7 +77,8 @@ def make_browser_tools() -> list[Tool]:
             results = []
             for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)".*?>(.*?)</a>',
                                  r.text, re.S):
-                results.append({"url": m.group(1), "title": _strip_html(m.group(2))})
+                results.append({"url": _clean_ddg(m.group(1)),
+                                "title": _strip_html(m.group(2))})
                 if len(results) >= limit:
                     break
             return {"query": query, "results": results}

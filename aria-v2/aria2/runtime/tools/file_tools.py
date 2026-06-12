@@ -35,9 +35,16 @@ def make_file_tools(base_dir: str, sandbox=None) -> list[Tool]:
             return {"error": "Path escapes the project folder."}
         if not p.exists():
             return {"error": f"Not found: {path}"}
+        if p.is_dir():
+            return {"error": f"Is a directory, not a file: {path}"}
         try:
-            text = p.read_text(encoding="utf-8", errors="replace")[:MAX_READ]
-            return {"path": path, "content": text}
+            full = p.read_text(encoding="utf-8", errors="replace")
+            text = full[:MAX_READ]
+            res = {"path": path, "content": text}
+            if len(full) > MAX_READ:  # tell the model it's seeing only the head
+                res["truncated"] = True
+                res["total_chars"] = len(full)
+            return res
         except Exception as e:
             return {"error": str(e)}
 
@@ -60,12 +67,18 @@ def make_file_tools(base_dir: str, sandbox=None) -> list[Tool]:
         p = _safe(base_dir, path)
         if p is None or not p.exists():
             return {"error": f"Not found: {path}"}
+        if not p.is_dir():
+            return {"error": f"Not a directory: {path}"}
         entries = []
         for child in sorted(p.iterdir()):
             entries.append(
                 {"name": child.name, "type": "dir" if child.is_dir() else "file"}
             )
-        return {"path": path, "entries": entries[:500]}
+        res = {"path": path, "entries": entries[:500]}
+        if len(entries) > 500:  # don't let the model assume it saw everything
+            res["truncated"] = True
+            res["total_entries"] = len(entries)
+        return res
 
     return [
         Tool(

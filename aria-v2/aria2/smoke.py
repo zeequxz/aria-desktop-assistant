@@ -791,6 +791,35 @@ def run_smoke() -> int:
           _pyres.get("exit_code") == 0
           and 'quotes " and back\\slash' in _pyres.get("stdout", ""))
 
+    # Reliability: child output is decoded as UTF-8 (not the Windows locale codec),
+    # so non-ASCII output neither crashes nor mojibakes.
+    import sys as _sys2
+    _uni = _sandbox.run_python("print('caf\\u00e9 \\u5317')")
+    check("run_python decodes non-ASCII (UTF-8) output without crashing",
+          _uni.get("exit_code") == 0 and "café 北" in _uni.get("stdout", ""))
+    # In a normal (unfrozen) install the interpreter is sys.executable; the frozen
+    # app falls back to a real python on PATH (so run_python doesn't relaunch ARIA).
+    check("_python_exe resolves a real interpreter (sys.executable unfrozen)",
+          _sandbox._python_exe() == _sys2.executable)
+
+    # Reliability: read_file/list_dir signal truncation instead of silently
+    # returning partial data the model would treat as complete.
+    _big = ftools["write_file"].fn(path="big.txt", content="x" * 150_000)
+    _rbig = ftools["read_file"].fn(path="big.txt")
+    check("read_file flags truncation + reports total size",
+          _rbig.get("truncated") is True and _rbig.get("total_chars") == 150_000
+          and len(_rbig.get("content", "")) == 100_000)
+    _rsmall = ftools["read_file"].fn(path="big.txt")  # sanity: small read has no flag
+    check("read_file on a directory returns a clear error (not a crash)",
+          "directory" in str(ftools["read_file"].fn(path=".").get("error", "")).lower())
+
+    # web_search unwraps DuckDuckGo's redirect so callers get clean target URLs.
+    from aria2.runtime.tools.browser_tools import _clean_ddg
+    check("web_search cleans DuckDuckGo redirect URLs to the real destination",
+          _clean_ddg("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fp%3Fa%3D1")
+          == "https://example.com/p?a=1"
+          and _clean_ddg("https://plain.example/x") == "https://plain.example/x")
+
     # Bus unsubscribe (the mechanism ChatView.destroy() uses so destroyed views
     # stop receiving run.* events — fixes the rebuild_views handler leak).
     from aria2.core.events import EventBus as _EB
