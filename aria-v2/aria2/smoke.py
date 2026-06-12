@@ -857,7 +857,7 @@ def run_smoke() -> int:
     check("host exec backend runs the command directly",
           _sbx.wrap_isolated("echo hi", ".", "host") == ("echo hi", True))
 
-    # ── Project Leader orchestration (Stage 1) ────────────────────────────────
+    # ── Project Leader orchestration (Stages 1-3) ─────────────────────────────
     from aria2.services import orchestration_service as _orch
     _plan = _orch.parse_plan(
         'sure ```json\n[{"id":1,"title":"A","role":"coder"},'
@@ -921,7 +921,7 @@ def run_smoke() -> int:
                      "budget_usd": 0, "cost_usd": 0, "token_total": 0,
                      "forked_from_run_id": None, "forked_from_step": None,
                      "started_at": now_ms()})
-        _orch._execute("build x", p, a, None, _lrid)
+        _orch._orchestrate("build x", p, a, None, _lrid)
         _ltasks = _orch.tasks_for(_lrid)
         _byord = {t["ordinal"]: t for t in _ltasks}
         check("Project Leader runs a parallel wave + dependent step, all done",
@@ -935,6 +935,85 @@ def run_smoke() -> int:
               and "— Reviewer —" not in (_byord[2]["output"] or ""))
     finally:
         _orch._plan, _oreg.for_settings = _orig_plan, _orig_reg
+
+    # Stage 3: deliverable contracts + review verdicts (pure functions).
+    check("validate_deliverable enforces non-empty + keywords + json format",
+          _orch.validate_deliverable("", {})[0] is False
+          and _orch.validate_deliverable("hello world", {"expects": ["world"]})[0] is True
+          and _orch.validate_deliverable("hello", {"expects": ["world"]})[0] is False
+          and _orch.validate_deliverable('{"a":1}', {"format": "json"})[0] is True
+          and _orch.validate_deliverable("nope", {"format": "json"})[0] is False)
+    check("review_verdict reads the APPROVE / REVISE lead word",
+          _orch.review_verdict("REVISE: add tests") == "revise"
+          and _orch.review_verdict("APPROVE, looks good") == "approve"
+          and _orch.review_verdict("") == "approve")
+    check("parse_plan captures expects + json format into a contract",
+          _orch.parse_plan('[{"id":1,"title":"T","expects":["foo"],"format":"json"}]')
+          [0]["contract"] == {"expects": ["foo"], "format": "json"})
+
+    # Stage 3: revision loop (reviewer rejects once, then approves → coder re-runs)
+    # and honest contract failure (a deliverable missing a required keyword fails).
+    from aria2.core import config as _cfg3
+    _orig_review, _orig_reg3 = _orch._review, _oreg.for_settings
+    _oreg.for_settings = lambda s, o=None: (_OProv(), "fake")
+    _rev_calls = []
+
+    def _fake_review(task, output, project, settings):
+        _rev_calls.append(1)
+        return ("revise", "add a docstring") if len(_rev_calls) == 1 else ("approve", "good")
+    _orch._review = _fake_review
+    try:
+        _lrid3 = _nid("run")
+        _dbm.insert("runs", {"id": _lrid3, "kind": "leader", "status": "running",
+                     "agent_id": a["id"], "project_id": p["id"], "chat_id": None,
+                     "parent_run_id": None, "trigger_id": None, "title": "team",
+                     "budget_usd": 0, "cost_usd": 0, "token_total": 0,
+                     "forked_from_run_id": None, "forked_from_step": None,
+                     "started_at": now_ms()})
+        _ctid = _nid("task")
+        _dbm.insert("tasks", {"id": _ctid, "leader_run_id": _lrid3, "ordinal": 1,
+                     "title": "code", "description": "x", "role": "coder",
+                     "agent_id": "coder", "depends_on": "[]", "contract": "{}",
+                     "status": "pending", "run_id": None, "output": None,
+                     "created_at": now_ms(), "updated_at": now_ms()})
+        _ctask = {"id": _ctid, "ordinal": 1, "title": "code", "description": "x",
+                  "role": "coder", "depends_on": [], "contract": {}}
+        _o, _out, _ok = _orch._run_one(_ctask, {}, p, _cfg3.load(), _lrid3, None, True)
+        check("revision loop re-runs a coder task until the reviewer approves",
+              _ok is True and len(_rev_calls) == 2
+              and "— Reviewer —" in _out and "good" in _out)
+
+        _ftid = _nid("task")
+        _dbm.insert("tasks", {"id": _ftid, "leader_run_id": _lrid3, "ordinal": 2,
+                     "title": "write", "description": "y", "role": "writer",
+                     "agent_id": "writer", "depends_on": "[]",
+                     "contract": '{"expects": ["UNICORN"]}', "status": "pending",
+                     "run_id": None, "output": None,
+                     "created_at": now_ms(), "updated_at": now_ms()})
+        _ftask = {"id": _ftid, "ordinal": 2, "title": "write", "description": "y",
+                  "role": "writer", "depends_on": [], "contract": {"expects": ["UNICORN"]}}
+        _fo, _fout, _fok = _orch._run_one(_ftask, {}, p, _cfg3.load(), _lrid3, None, True)
+        check("a deliverable that fails its contract fails the task honestly",
+              _fok is False
+              and _dbm.one("SELECT status FROM tasks WHERE id=?",
+                           (_ftid,))["status"] == "failed")
+    finally:
+        _orch._review, _oreg.for_settings = _orig_review, _orig_reg3
+
+    # Stage 3: plan-approval checkpoint — pending_for_chat finds it, cancel discards.
+    _achat, _arun = _nid("chat"), _nid("run")
+    _dbm.insert("runs", {"id": _arun, "kind": "leader", "status": "awaiting_approval",
+                 "agent_id": a["id"], "project_id": p["id"], "chat_id": _achat,
+                 "parent_run_id": None, "trigger_id": None, "title": "Team: do it",
+                 "budget_usd": 0, "cost_usd": 0, "token_total": 0,
+                 "forked_from_run_id": None, "forked_from_step": None,
+                 "started_at": now_ms()})
+    check("pending_for_chat finds a plan awaiting approval; cancel discards it",
+          (_orch.pending_for_chat(_achat) or {}).get("id") == _arun
+          and _orch.cancel(_achat) is True
+          and _dbm.one("SELECT status FROM runs WHERE id=?",
+                       (_arun,))["status"] == "cancelled"
+          and _orch.pending_for_chat(_achat) is None)
 
     from aria2.core import db as _db
     bt = _db.one("PRAGMA busy_timeout")

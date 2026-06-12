@@ -19,6 +19,7 @@ _STATUS = {
     "done": (theme.SUCCESS, "✓"), "running": (theme.WARN, "…"),
     "failed": (theme.DANGER, "✗"), "pending": (theme.TEXT_FAINT, "•"),
     "blocked": (theme.TEXT_FAINT, "⏸"),
+    "awaiting_approval": (theme.WARN, "⏸"), "cancelled": (theme.TEXT_FAINT, "⊘"),
 }
 
 

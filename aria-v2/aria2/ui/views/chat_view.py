@@ -791,6 +791,22 @@ class ChatView(ctk.CTkFrame):
             self._add_bubble("assistant", orchestration_service.USAGE, ts=now)
             self._scroll_bottom()
             return
+        # Approval checkpoint controls for a plan that's awaiting approval.
+        low = goal.lower()
+        if low in ("go", "run", "approve"):
+            self._add_bubble("user", f"/team {goal}", ts=now)
+            ok = orchestration_service.resume(self.chat_id)
+            if not ok:
+                self._add_bubble("assistant", "No plan is waiting for approval.", ts=now)
+            self._scroll_bottom()
+            return
+        if low in ("cancel", "stop"):
+            self._add_bubble("user", f"/team {goal}", ts=now)
+            ok = orchestration_service.cancel(self.chat_id)
+            if not ok:
+                self._add_bubble("assistant", "No plan is waiting for approval.", ts=now)
+            self._scroll_bottom()
+            return
         self._add_bubble("user", f"/team {goal}", ts=now)
         chat = chat_service.get_chat(self.chat_id) or {}
         agent = agent_service.get(chat.get("agent_id") or "assistant")

@@ -102,6 +102,11 @@ DEFAULTS: dict = {
     # whether code tasks get an automatic reviewer pass before acceptance.
     "orchestration_max_parallel": 3,
     "auto_review": True,
+    # Stage 3: how many revise→re-run rounds a code task may take when the
+    # reviewer or a deliverable contract rejects it; and whether the leader pauses
+    # for human approval (`/team go`) after planning before it executes.
+    "max_revisions": 2,
+    "orchestration_plan_approval": False,
     "max_iterations": 40,
     "context_token_budget": 120_000,
     "default_run_budget_usd": 1.0,
