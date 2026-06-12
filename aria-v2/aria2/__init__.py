@@ -11,4 +11,4 @@ Nothing in ui/ talks to models/ or runtime/ directly — everything goes
 through services/, so the GUI, CLI, and (future) automations share one engine.
 """
 
-__version__ = "2.15.0"
+__version__ = "2.16.0"

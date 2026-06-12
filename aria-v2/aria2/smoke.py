@@ -1245,6 +1245,13 @@ def run_smoke() -> int:
     check("OpenAI translator drops image blocks from a tool result (text-only role)",
           _toolmsg["content"] == "saw screen")
 
+    # Local (Ollama) runs estimate token usage instead of always reporting 0.
+    from aria2.models.ollama_provider import _estimate_input_tokens as _eit
+    check("ollama input-token estimate counts system + message text (not 0)",
+          _eit("you are a helpful bot",
+               [{"role": "user", "content": [{"type": "text", "text": "hello there friend"}]}]) > 1
+          and _eit("sys", [{"role": "user", "content": "a plain string message"}]) > 1)
+
     # ── Computer-use tools: input validation + screenshot retention ───────────
     from aria2.runtime.tools.computer_tools import _prune_screenshots as _prune
     from aria2.runtime.tools.computer_tools import make_computer_tools as _mct

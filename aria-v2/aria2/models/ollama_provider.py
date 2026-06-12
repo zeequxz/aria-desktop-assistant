@@ -15,8 +15,24 @@ import ast
 import json
 import re
 
-from aria2.models.base import Capabilities
+from aria2.models.base import Capabilities, estimate_tokens
 from aria2.models.openai_provider import OpenAIProvider
+
+
+def _estimate_input_tokens(system: str, messages: list[dict]) -> int:
+    """Approximate prompt tokens from the system prompt + message text. Ollama's
+    OpenAI-compatible stream doesn't return usage, so we estimate rather than
+    report 0."""
+    parts = [system or ""]
+    for m in messages or []:
+        c = m.get("content")
+        if isinstance(c, str):
+            parts.append(c)
+        elif isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict):
+                    parts.append(b.get("text") or b.get("content") or "")
+    return estimate_tokens(" ".join(str(p) for p in parts))
 
 
 class OllamaProvider(OpenAIProvider):
@@ -142,7 +158,12 @@ class OllamaProvider(OpenAIProvider):
                                   tool_call={"id": slot.get("id", "tc_0"),
                                              "name": slot["name"],
                                              "input": parsed})
-            yield StreamEvent(type="usage", usage={"input": 0, "output": 0})
+            # Ollama's /v1 stream omits usage (stream_options hangs it), so token
+            # counts would always read 0 — making the stats/inspector look broken.
+            # Estimate from the text instead so local runs show believable numbers.
+            yield StreamEvent(type="usage", usage={
+                "input": _estimate_input_tokens(system, messages),
+                "output": estimate_tokens("".join(text_buf))})
             yield StreamEvent(type="done", stop_reason=stop_reason)
         except Exception as e:
             yield StreamEvent(type="error", error=str(e))
