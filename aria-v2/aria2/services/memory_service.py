@@ -19,12 +19,61 @@ from __future__ import annotations
 
 import json
 import math
+import re
 
 from aria2.core import db
 from aria2.core.ids import new_id, now_ms
 from aria2.models import embeddings
 
 _RECENCY_HALFLIFE_MS = 30 * 24 * 3600 * 1000  # 30 days
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokens(s: str) -> set[str]:
+    return set(_WORD_RE.findall((s or "").lower()))
+
+
+def _lexical(query_tokens: set[str], text: str) -> float:
+    """Fraction of query terms that appear verbatim in `text` (0–1). Complements
+    the embedding cosine — exact term hits matter, and the offline hashing
+    embedding is weak at them."""
+    mt = _tokens(text)
+    if not query_tokens or not mt:
+        return 0.0
+    return len(query_tokens & mt) / len(query_tokens)
+
+
+# Leading phrases that mean "store this". Order matters: longer/more specific
+# variants first so the right prefix is stripped (e.g. "remember that" beats
+# "remember ").
+_MEM_TRIGGERS = (
+    "remember that", "remember:", "remember ",
+    "note that", "make a note that", "make a note:", "make a note ",
+    "keep in mind that", "keep in mind ",
+    "don't forget that", "don't forget ", "dont forget that", "dont forget ",
+    "for future reference,", "for future reference ", "for the record,",
+    "just so you know,", "just so you know ", "fyi,", "fyi ",
+)
+
+
+def extract_memory_request(text: str) -> str | None:
+    """If `text` is a 'remember this' request, return the bare fact with the
+    imperative stripped (so recall stores 'my sister's birthday is June 3', not
+    'remember that my sister's birthday is June 3'). Returns None otherwise."""
+    t = (text or "").strip()
+    low = t.lower()
+    best = None
+    for trig in _MEM_TRIGGERS:
+        i = low.find(trig)
+        if i != -1 and (best is None or i < best[0]):
+            best = (i, trig)
+    if best is None:
+        return None
+    fact = t[best[0] + len(best[1]):].strip(" ,:;-—")
+    if fact.lower().startswith("that "):
+        fact = fact[5:].strip()
+    return fact or None
 
 
 # ── Writing ───────────────────────────────────────────────────────────────────
@@ -69,13 +118,18 @@ def recall(query: str, scope: str, scope_id: str = "", limit: int = 6) -> list[d
         return []
     qvec = embeddings.embed(query)
     sims = embeddings.score_batch(qvec, [r["embedding"] for r in rows])
+    qtokens = _tokens(query)
     now = now_ms()
     scored = []
     for r, sim in zip(rows, sims):
         age = now - (r["last_accessed"] or r["created_at"])
         recency = math.exp(-age / _RECENCY_HALFLIFE_MS)
         pin = 0.25 if r["pinned"] else 0.0
-        base = 0.65 * sim + 0.20 * (r["importance"] or 0) + 0.15 * recency + pin
+        # Hybrid relevance: embedding cosine + verbatim term overlap. The lexical
+        # term rescues exact matches the offline hashing embedding misses.
+        lexical = _lexical(qtokens, r["text"])
+        base = (0.55 * sim + 0.15 * lexical + 0.20 * (r["importance"] or 0)
+                + 0.15 * recency + pin)
         score = base * (0.4 + 0.6 * (r["confidence"] if r["confidence"] is not None else 0.7))
         scored.append((score, r))
     scored.sort(key=lambda x: x[0], reverse=True)

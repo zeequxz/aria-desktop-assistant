@@ -68,6 +68,25 @@ def run_smoke() -> int:
     check("memory recall returns the deploy fact",
           any("Friday" in h["text"] for h in hits))
 
+    # Hybrid recall: a verbatim term match should outrank an unrelated memory even
+    # with the weak offline embedding (lexical component of the score).
+    memory_service.remember("My wife is named Sara and she loves hiking.",
+                            scope="agent", scope_id="memtest")
+    memory_service.remember("The build pipeline runs on Jenkins nightly.",
+                            scope="agent", scope_id="memtest")
+    _mh = memory_service.recall("what is my wife's name", scope="agent", scope_id="memtest")
+    check("hybrid recall ranks the lexically-relevant memory first",
+          bool(_mh) and "Sara" in _mh[0]["text"])
+
+    # Capture: a "remember this" request is stored as a clean fact, not the raw
+    # imperative; ordinary messages are not captured.
+    check("extract_memory_request strips the imperative into a bare fact",
+          memory_service.extract_memory_request(
+              "Remember that my sister's birthday is June 3") == "my sister's birthday is June 3"
+          and memory_service.extract_memory_request(
+              "note that the wifi password is hunter2") == "the wifi password is hunter2"
+          and memory_service.extract_memory_request("what's the weather today") is None)
+
     # Knowledge ingest + search
     knowledge_service.ingest_text(p["id"], "arch.md",
                                   "The run engine streams tokens over an event bus "

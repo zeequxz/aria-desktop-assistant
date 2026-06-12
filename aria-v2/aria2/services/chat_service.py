@@ -382,13 +382,14 @@ def _maybe_reflect(chat_id, agent, project, messages, result: RunResult) -> None
     scope_id = "" if scope == "user" else (
         agent["id"] if scope == "agent" else project["id"]
     )
-    # Store only when the user explicitly asked to remember (cheap heuristic);
-    # the agent also has the `remember` tool for deliberate storage.
+    # Store only when the user explicitly asked to remember something; extract the
+    # bare fact (imperative stripped) so recall isn't polluted with "remember
+    # that …". The agent also has the `remember` tool for deliberate storage.
     last_user = messages[-1]["content"] if messages else ""
     if isinstance(last_user, list):
         last_user = " ".join(b.get("text", "") for b in last_user if isinstance(b, dict))
-    if any(k in last_user.lower() for k in ("remember", "note that", "keep in mind")):
+    fact = memory_service.extract_memory_request(last_user)
+    if fact:
         memory_service.remember(
-            last_user.strip(), scope=scope, scope_id=scope_id,
-            importance=0.7, kind="episodic",
+            fact, scope=scope, scope_id=scope_id, importance=0.7, kind="episodic",
         )
