@@ -200,7 +200,7 @@ class ChatView(ctk.CTkFrame):
 
         # Attachment chips span the top, collapsed when empty.
         self.attach_bar = ctk.CTkFrame(field, fg_color="transparent")
-        self.attach_bar.grid(row=0, column=0, columnspan=6, sticky="ew", padx=8, pady=(6, 0))
+        self.attach_bar.grid(row=0, column=0, columnspan=7, sticky="ew", padx=8, pady=(6, 0))
         self.attach_bar.grid_remove()
 
         w.ghost_button(field, "📎", self._attach, width=32, height=32,
@@ -231,9 +231,14 @@ class ChatView(ctk.CTkFrame):
         w.ghost_button(field, "Explore", self._explore, width=64, height=30,
                        fg_color="transparent", tooltip="Run several strategies and compare"
                        ).grid(row=1, column=4, padx=2)
+        w.ghost_button(field, "🔁", self._loop_button, width=32, height=30,
+                       fg_color="transparent",
+                       tooltip="Repeat this prompt on a schedule — results post here.\n"
+                               "Or type: /loop 10m <prompt>   (/loop stop to end)"
+                       ).grid(row=1, column=5, padx=2)
         self.send_btn = w.primary_button(field, "Send", self._send, width=72, height=32,
                                          tooltip="Send  ·  Enter  (Shift+Enter for newline)")
-        self.send_btn.grid(row=1, column=5, padx=(2, 8), pady=6)
+        self.send_btn.grid(row=1, column=6, padx=(2, 8), pady=6)
 
     # ── Composer ──────────────────────────────────────────────────────────────────
 
@@ -642,6 +647,14 @@ class ChatView(ctk.CTkFrame):
         attachments = list(self._attachments)
         if (not text and not attachments) or not self.chat_id or self.active_run:
             return
+        if text.lower().startswith("/loop"):
+            # Loop prompting — handled locally, never sent to the model.
+            self.input.delete("1.0", "end")
+            self._autosize_input()
+            from aria2.core import config as _cfg0
+            _cfg0.set_key(f"draft_{self.project_id}", "")
+            self._handle_loop_command(text)
+            return
         self.input.delete("1.0", "end")
         self._autosize_input()  # shrink back to one line
         from aria2.core import config as _cfg
@@ -685,6 +698,82 @@ class ChatView(ctk.CTkFrame):
         if self.active_run:
             chat_service.cancel(self.active_run)
 
+    # ── Loop prompting ────────────────────────────────────────────────────────────
+
+    def _handle_loop_command(self, text: str):
+        """Handle '/loop …' typed in the composer (create/list/stop/help)."""
+        import time as _t
+        from aria2.services import automation_service
+        cmd = automation_service.parse_loop_command(text)
+        now = int(_t.time() * 1000)
+        if cmd["action"] == "create":
+            chat = chat_service.get_chat(self.chat_id) or {}
+            automation_service.create_loop(
+                cmd["prompt"], cmd["every_minutes"], project_id=self.project_id,
+                agent_id=chat.get("agent_id") or "assistant", chat_id=self.chat_id)
+            self._add_bubble("assistant",
+                             f"🔁 **Loop created** — running every "
+                             f"{_fmt_every(cmd['every_minutes'])}:\n"
+                             f"“{cmd['prompt']}”\n\n"
+                             "Results will post here. Stop with `/loop stop` "
+                             "(or manage it in Automations).", ts=now)
+        elif cmd["action"] == "stop":
+            n = automation_service.stop_loops(self.chat_id)
+            self._add_bubble("assistant",
+                             f"⏹ Stopped {n} loop(s) for this chat." if n
+                             else "No active loops in this chat.", ts=now)
+        elif cmd["action"] == "list":
+            loops = automation_service.loops_for_chat(self.chat_id)
+            if not loops:
+                msg = "No active loops in this chat.\n\n" + automation_service.LOOP_USAGE
+            else:
+                import json as _json
+                lines = []
+                for t in loops:
+                    cfg = _json.loads(t["config_json"] or "{}")
+                    lines.append(f"• every {_fmt_every(cfg.get('every', 10))} — "
+                                 f"“{t['prompt'][:60]}”")
+                msg = "🔁 Active loops:\n" + "\n".join(lines)
+            self._add_bubble("assistant", msg, ts=now)
+        else:  # help (optionally with a parse error)
+            msg = automation_service.LOOP_USAGE
+            if cmd.get("error"):
+                msg = f"⚠ {cmd['error']}\n\n{msg}"
+            self._add_bubble("assistant", msg, ts=now)
+        self._scroll_bottom()
+
+    def _loop_button(self):
+        """🔁 in the composer: turn the typed prompt into a loop (asks interval)."""
+        text = self.input.get("1.0", "end").strip()
+        if not text:
+            self.app.toast("Type a prompt first, then press 🔁 to repeat it.",
+                           "info")
+            return
+        dlg = ctk.CTkInputDialog(title="Loop prompt",
+                                 text="Repeat every…  (e.g. 10m, 2h, 1d)")
+        val = (dlg.get_input() or "").strip()
+        if not val:
+            return
+        from aria2.services import automation_service
+        cmd = automation_service.parse_loop_command(f"/loop {val} {text}")
+        if cmd["action"] != "create":
+            self.app.toast("Couldn't read that interval — try 10m, 2h or 1d.",
+                           "warning")
+            return
+        self.input.delete("1.0", "end")
+        self._autosize_input()
+        self._handle_loop_command(f"/loop {val} {text}")
+
+    def _on_loop_result(self, payload):
+        """A loop bound to this chat finished a run — append its reply live.
+        (It's already persisted, so closed chats show it on next open.)"""
+        if payload.get("chat_id") != self.chat_id:
+            return
+        import time as _t
+        self._add_bubble("assistant", f"🔁 {payload.get('text', '')}",
+                         ts=int(_t.time() * 1000))
+        self._scroll_bottom()
+
     # ── Streaming events ──────────────────────────────────────────────────────────
 
     def _subscribe(self):
@@ -693,6 +782,7 @@ class ChatView(ctk.CTkFrame):
         self._unsubs.append(self.app.on_event("run.done",       self._on_done))
         self._unsubs.append(self.app.on_event("run.error",      self._on_error))
         self._unsubs.append(self.app.on_event("run.clear_text", self._on_clear_text))
+        self._unsubs.append(self.app.on_event("loop.result",    self._on_loop_result))
 
     def destroy(self):
         # Release bus subscriptions so a destroyed view (e.g. after a font-size
@@ -1215,6 +1305,16 @@ def _provider_key_to_ollama_model(key: str) -> str:
 
 def _routing_idx_to_key(idx: int) -> str:
     return {1: "local_only", 2: "cloud_fallback"}.get(idx, "")
+
+
+def _fmt_every(minutes: int) -> str:
+    """Human label for a loop interval: 10 → '10 min', 120 → '2 h', 1440 → '1 day'."""
+    if minutes % 1440 == 0:
+        d = minutes // 1440
+        return f"{d} day" + ("s" if d > 1 else "")
+    if minutes % 60 == 0:
+        return f"{minutes // 60} h"
+    return f"{minutes} min"
 
 
 def _routing_key_to_idx(key: str) -> int:

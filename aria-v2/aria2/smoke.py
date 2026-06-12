@@ -502,6 +502,36 @@ def run_smoke() -> int:
     automation_service.delete(sch["id"])
     automation_service.delete(once_t["id"])
 
+    # Loop prompting: /loop parsing, the minutes interval, chat-bound loops.
+    from aria2.services import chat_service as _lchs
+    _pl = automation_service.parse_loop_command
+    _c1 = _pl("/loop 10m check my downloads")
+    check("/loop parses minutes + hours + days intervals",
+          _c1 == {"action": "create", "every_minutes": 10,
+                  "prompt": "check my downloads"}
+          and _pl("/loop 2h x")["every_minutes"] == 120
+          and _pl("/loop 1d x")["every_minutes"] == 1440)
+    check("/loop stop, list, help and non-loop text parse correctly",
+          _pl("/loop stop")["action"] == "stop"
+          and _pl("/loop list")["action"] == "list"
+          and _pl("/loop")["action"] == "help"
+          and _pl("/loop weekly x")["action"] == "help"
+          and _pl("hello")["action"] == "none")
+    _lchat = _lchs.create_chat(p["id"], title="loop chat")
+    _lt = automation_service.create_loop("ping me", 10, project_id=p["id"],
+                                         agent_id=a["id"], chat_id=_lchat["id"])
+    check("create_loop schedules a minutes trigger bound to the chat",
+          _lt["enabled"] == 1 and _lt["next_run"] is not None
+          and abs(_lt["next_run"] - (now_ms() + 10 * 60 * 1000)) < 90_000
+          and json.loads(_lt["config_json"])["chat_id"] == _lchat["id"])
+    automation_service._post_loop_result(_lchat["id"], "loop says hi")
+    _lmsgs = _lchs.list_messages(_lchat["id"])
+    check("loop results are posted into the originating chat",
+          _lmsgs and "loop says hi" in json.dumps(_lmsgs[-1]["content"]))
+    check("stop_loops disables the chat's loops",
+          automation_service.stop_loops(_lchat["id"]) == 1
+          and automation_service.loops_for_chat(_lchat["id"]) == [])
+
     config.set_key("telegram_allowlist", [])  # reset
 
     # ── Browser tools + outbound notify tool ──────────────────────────────────

@@ -14,6 +14,7 @@ The Scheduler thread:
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -116,6 +117,12 @@ def fire(trigger_id: str, context: str = "") -> str:
         db.update("triggers", trigger_id,
                   {"last_fired": now_ms(), "last_run_id": final_run_id})
         bus.publish("trigger.fired", {"trigger_id": trigger_id, "run_id": final_run_id})
+        # Chat-bound loops post their result back into the originating chat.
+        cfg = json.loads(t["config_json"] or "{}")
+        if cfg.get("chat_id"):
+            _post_loop_result(
+                cfg["chat_id"],
+                (result.text or "").strip() or f"(no reply — {result.status})")
 
     threading.Thread(target=_worker, daemon=True, name=f"trigger-{trigger_id}").start()
     return run_id
@@ -141,6 +148,85 @@ def schedule_once(name: str, prompt: str, date_str: str, at: str = "09:00", *,
     """Create a one-off calendar trigger for a specific date+time."""
     return create(name, "schedule", prompt, project_id=project_id, agent_id=agent_id,
                   config_obj={"interval": "once", "date": date_str, "at": at})
+
+
+# ── Loop prompting ("/loop 10m <prompt>" in chat) ───────────────────────────
+
+LOOP_USAGE = (
+    "🔁 Loop prompting — run a prompt on a schedule and post results here:\n"
+    "  /loop 10m <prompt>   — every 10 minutes (also h = hours, d = days)\n"
+    "  /loop list           — show this chat's active loops\n"
+    "  /loop stop           — stop this chat's loops\n"
+    "Loops also appear in the Automations tab."
+)
+
+_LOOP_RE = re.compile(r"^(\d+)\s*([mhd])\s+(.+)$", re.IGNORECASE | re.DOTALL)
+
+
+def parse_loop_command(text: str) -> dict:
+    """Parse a '/loop …' chat command.
+
+    Returns {"action": "create", "every_minutes": N, "prompt": str} or
+    {"action": "stop"|"list"|"help"|"none"} (+ "error" for a bad interval)."""
+    t = (text or "").strip()
+    if not t.lower().startswith("/loop"):
+        return {"action": "none"}
+    rest = t[5:].strip()
+    if not rest or rest.lower() in ("help", "?"):
+        return {"action": "help"}
+    if rest.lower() == "stop":
+        return {"action": "stop"}
+    if rest.lower() == "list":
+        return {"action": "list"}
+    m = _LOOP_RE.match(rest)
+    if not m:
+        return {"action": "help",
+                "error": "Couldn't read that — use an interval like 10m, 2h or 1d."}
+    n, unit, prompt = int(m.group(1)), m.group(2).lower(), m.group(3).strip()
+    minutes = n * {"m": 1, "h": 60, "d": 1440}[unit]
+    return {"action": "create", "every_minutes": max(1, minutes), "prompt": prompt}
+
+
+def create_loop(prompt: str, every_minutes: int, *, project_id: str = "general",
+                agent_id: str = "assistant", chat_id: str | None = None) -> dict:
+    """Create a recurring loop trigger bound to a chat (results post back there)."""
+    name = "Loop: " + (prompt[:40] + ("…" if len(prompt) > 40 else ""))
+    return create(name, "schedule", prompt, project_id=project_id, agent_id=agent_id,
+                  config_obj={"interval": "minutes",
+                              "every": max(1, int(every_minutes)),
+                              "chat_id": chat_id or "", "loop": True})
+
+
+def loops_for_chat(chat_id: str) -> list[dict]:
+    out = []
+    for t in list_triggers():
+        if t["kind"] != "schedule" or not t["enabled"]:
+            continue
+        cfg = json.loads(t["config_json"] or "{}")
+        if cfg.get("loop") and cfg.get("chat_id") == chat_id:
+            out.append(t)
+    return out
+
+
+def stop_loops(chat_id: str) -> int:
+    """Disable all of a chat's loops. Returns how many were stopped."""
+    loops = loops_for_chat(chat_id)
+    for t in loops:
+        db.update("triggers", t["id"], {"enabled": 0, "next_run": None})
+    return len(loops)
+
+
+def _post_loop_result(chat_id: str, text: str) -> None:
+    """Post a loop run's reply into the chat it was created from, so results
+    show up in the conversation — not only in the Runs tab."""
+    try:
+        from aria2.services import chat_service
+
+        chat_service._persist_message(
+            chat_id, "assistant", [{"type": "text", "text": f"🔁 {text}"}])
+        bus.publish("loop.result", {"chat_id": chat_id, "text": text})
+    except Exception:
+        pass
 
 
 # ── Webhook helpers ─────────────────────────────────────────────────────────
@@ -185,6 +271,11 @@ def _compute_next_run(kind: str, cfg: dict) -> int | None:
     except Exception:
         hh, mm = 9, 0
     now = datetime.now()
+    if interval == "minutes":
+        # Loop prompting: re-run every N minutes (scheduler ticks every 30 s, so
+        # the practical minimum is 1 minute).
+        every = max(1, int(cfg.get("every", 10) or 10))
+        return int((now + timedelta(minutes=every)).timestamp() * 1000)
     if interval == "once":
         # A one-off at a specific calendar date+time (calendar view). Past => None.
         date_str = cfg.get("date")
