@@ -112,6 +112,19 @@ def search(query: str, project_id: str, limit: int = 5) -> list[dict]:
             for s, r in scored[:limit] if s > 0.01]
 
 
+def reembed_all() -> int:
+    """Re-embed every knowledge chunk with the current embedding provider (run
+    after switching providers so old-dimension vectors don't orphan). Returns the
+    number of chunks re-embedded."""
+    rows = db.all("SELECT id, text FROM chunks")
+    if not rows:
+        return 0
+    vecs = embeddings.embed_batch([r["text"] for r in rows])
+    for r, blob in zip(rows, vecs):
+        db.update("chunks", r["id"], {"embedding": blob})
+    return len(rows)
+
+
 def list_documents(project_id: str) -> list[dict]:
     rows = db.all(
         "SELECT d.*, (SELECT COUNT(*) FROM chunks c WHERE c.document_id=d.id) AS n_chunks "

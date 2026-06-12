@@ -94,6 +94,32 @@ def run_smoke() -> int:
     ks = knowledge_service.search("how are runs stored", p["id"])
     check("knowledge search returns a hit", len(ks) > 0)
 
+    # Re-embed migration: re-vectorise stored memory + knowledge with the current
+    # provider (so switching embedding providers doesn't orphan old vectors).
+    check("reembed_all re-embeds existing memory + knowledge",
+          memory_service.reembed_all() > 0 and knowledge_service.reembed_all() > 0
+          and len(memory_service.recall("when do we deploy", scope="project",
+                                        scope_id=p["id"])) > 0)
+    # Ollama embeddings parse the OpenAI-compatible /v1/embeddings response.
+    import requests as _rq
+    _orig_post = _rq.post
+
+    class _FakeEmbResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [{"embedding": [0.1, 0.2, 0.3]},
+                             {"embedding": [0.4, 0.5, 0.6]}]}
+    _rq.post = lambda *a, **k: _FakeEmbResp()
+    try:
+        from aria2.models.embeddings import _ollama_embed
+        check("ollama embeddings parse the OpenAI-compatible response",
+              _ollama_embed(["a", "b"], "http://localhost:11434", "nomic-embed-text")
+              == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+    finally:
+        _rq.post = _orig_post
+
     # Chat persistence + fork
     chat = chat_service.create_chat(p["id"], agent_id=a["id"])
     # Persisting a message publishes message.persisted (so the UI can attach the

@@ -252,6 +252,19 @@ def delete_memory(mem_id: str) -> None:
     db.delete("memories", mem_id)
 
 
+def reembed_all() -> int:
+    """Re-embed every memory with the current embedding provider. Run after
+    switching providers — otherwise old vectors (a different dimension) silently
+    score 0 at recall, orphaning past memories. Returns how many were re-embedded."""
+    rows = db.all("SELECT id, text FROM memories")
+    if not rows:
+        return 0
+    vecs = embeddings.embed_batch([r["text"] for r in rows])
+    for r, blob in zip(rows, vecs):
+        db.update("memories", r["id"], {"embedding": blob})
+    return len(rows)
+
+
 def decay() -> int:
     cutoff = now_ms() - 60 * 24 * 3600 * 1000
     stale = db.all(

@@ -129,6 +129,23 @@ def _openai_embed(texts: list[str], key: str) -> list[list[float]]:
     return [d.embedding for d in resp.data]
 
 
+def _ollama_embed(texts: list[str], base_url: str, model: str) -> list[list[float]]:
+    """Real local semantic embeddings via Ollama's OpenAI-compatible endpoint
+    (e.g. nomic-embed-text). Free, offline, and far better than the hashing
+    fallback — but the model must be pulled (`ollama pull nomic-embed-text`)."""
+    import requests
+
+    base = (base_url or "http://localhost:11434").rstrip("/")
+    r = requests.post(
+        f"{base}/v1/embeddings",
+        headers={"Authorization": "Bearer ollama"},
+        json={"model": model, "input": texts},
+        timeout=120,
+    )
+    r.raise_for_status()
+    return [d["embedding"] for d in r.json()["data"]]
+
+
 def embed(text: str) -> bytes:
     """Embed one string and return a packed float32 BLOB for storage."""
     return embed_batch([text])[0]
@@ -144,6 +161,10 @@ def embed_batch(texts: list[str]) -> list[bytes]:
         if provider == "openai" and s.get("openai_api_key"):
             vecs = _openai_embed(texts, s["openai_api_key"])
             return [_pack(v) for v in vecs]
+        if provider == "ollama":
+            vecs = _ollama_embed(texts, s.get("ollama_url", "http://localhost:11434"),
+                                 s.get("ollama_embed_model", "nomic-embed-text"))
+            return [_pack(v) for v in vecs]
     except Exception:
-        pass  # fall through to local on any remote failure
+        pass  # fall through to local on any remote/connection failure
     return [_pack(_local_embed(t)) for t in texts]

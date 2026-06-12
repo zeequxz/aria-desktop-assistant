@@ -9,7 +9,7 @@ from aria2.ui import theme
 from aria2.ui.views import widgets as w
 
 _PROVIDERS = ["claude", "openai", "local", "grok", "gemini", "openai_compat"]
-_EMBED = ["local", "voyage", "openai"]
+_EMBED = ["local", "ollama", "voyage", "openai"]
 _POLICY = ["ask", "allow", "deny"]
 
 
@@ -711,6 +711,7 @@ class SettingsView(ctk.CTkFrame):
 
     def _save(self, silent: bool = False):
         s = config.load()
+        _old_embed = s.get("embedding_provider", "local")
         s["provider"] = self.provider.get()
         s["embedding_provider"] = self.embed.get()
         s["default_tool_policy"] = self.policy.get()
@@ -799,6 +800,23 @@ class SettingsView(ctk.CTkFrame):
             ambient_service.watcher.start()
         else:
             ambient_service.watcher.stop()
+        # Re-embed stored memory + knowledge when the embedding provider changed,
+        # so existing vectors don't orphan (a different dimension scores 0).
+        if s["embedding_provider"] != _old_embed:
+            new_prov = s["embedding_provider"]
+            self.app.toast("Re-embedding memory + knowledge…", "info")
+            import threading as _th
+
+            def _reembed():
+                from aria2.services import knowledge_service, memory_service
+                try:
+                    n = memory_service.reembed_all() + knowledge_service.reembed_all()
+                    self.app.after(0, lambda: self.app.toast(
+                        f"Re-embedded {n} items with {new_prov}", "success"))
+                except Exception as exc:
+                    self.app.after(0, lambda: self.app.toast(
+                        f"Re-embed failed: {exc}", "error"))
+            _th.Thread(target=_reembed, daemon=True, name="reembed").start()
         if webhook_on:
             automation_service.webhook_server.start()
         else:
