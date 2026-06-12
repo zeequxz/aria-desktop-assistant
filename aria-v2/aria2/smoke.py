@@ -152,6 +152,23 @@ def run_smoke() -> int:
     ks = knowledge_service.search("how are runs stored", p["id"])
     check("knowledge search returns a hit", len(ks) > 0)
 
+    # ingest_folder skips vendored dirs (node_modules) instead of flooding the KB.
+    import os as _os4
+    import tempfile as _tf4
+    _kf = _tf4.mkdtemp()
+    _os4.makedirs(_os4.path.join(_kf, "node_modules", "pkg"))
+    _os4.makedirs(_os4.path.join(_kf, "src"))
+    for _rel in ("readme.md", "src/app.py", "node_modules/pkg/index.js"):
+        with open(_os4.path.join(_kf, _rel), "w", encoding="utf-8") as _fh:
+            _fh.write("some knowledge content to embed\n")
+    _kp = project_service.create("KnowFolderTest", folder=_kf)
+    _kres = knowledge_service.ingest_folder(_kp["id"], _kf)
+    _kdocs = [d["title"] for d in knowledge_service.list_documents(_kp["id"])]
+    check("ingest_folder ingests source but skips node_modules",
+          "readme.md" in _kdocs and "app.py" in _kdocs
+          and "index.js" not in _kdocs and _kres["files"] == 2)
+    project_service.delete(_kp["id"])
+
     # Re-embed migration: re-vectorise stored memory + knowledge with the current
     # provider (so switching embedding providers doesn't orphan old vectors).
     check("reembed_all re-embeds existing memory + knowledge",

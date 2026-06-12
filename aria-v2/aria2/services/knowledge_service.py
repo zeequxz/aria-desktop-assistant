@@ -23,6 +23,11 @@ _TEXT_EXTS = {
     ".html", ".css", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".sh", ".sql",
     ".toml", ".ini", ".cfg",
 }
+# Vendored / build dirs to never ingest — they'd flood the knowledge base (and the
+# max_files cap) with code the user didn't write.
+_IGNORE_DIRS = {"node_modules", "__pycache__", "venv", "dist", "build", "target",
+                "out", "bin", "obj", ".tox", ".mypy_cache", ".pytest_cache",
+                ".gradle", ".next", ".cache"}
 
 
 def _chunk(text: str) -> list[str]:
@@ -72,18 +77,26 @@ def ingest_file(project_id: str, path: str) -> dict:
 
 
 def ingest_folder(project_id: str, folder: str, max_files: int = 500) -> dict:
+    import os
+
     root = Path(folder)
     if not root.exists():
         return {"error": f"Folder not found: {folder}"}
     count, chunks = 0, 0
-    for f in root.rglob("*"):
+    for dirpath, dirs, files in os.walk(folder):
+        # Prune vendored + hidden dirs in place so we never descend into them.
+        dirs[:] = [d for d in dirs
+                   if d not in _IGNORE_DIRS and not d.startswith(".")]
+        for name in files:
+            if count >= max_files:
+                break
+            if os.path.splitext(name)[1].lower() in _TEXT_EXTS:
+                res = ingest_file(project_id, os.path.join(dirpath, name))
+                if "chunks" in res:
+                    count += 1
+                    chunks += res["chunks"]
         if count >= max_files:
             break
-        if f.is_file() and f.suffix.lower() in _TEXT_EXTS and ".git" not in f.parts:
-            res = ingest_file(project_id, str(f))
-            if "chunks" in res:
-                count += 1
-                chunks += res["chunks"]
     return {"files": count, "chunks": chunks}
 
 
