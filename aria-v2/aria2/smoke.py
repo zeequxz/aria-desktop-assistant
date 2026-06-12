@@ -1189,6 +1189,27 @@ def run_smoke() -> int:
     finally:
         _oreg.for_settings = _save_reg
 
+    # ── Computer-use tools: input validation + screenshot retention ───────────
+    from aria2.runtime.tools.computer_tools import _prune_screenshots as _prune
+    from aria2.runtime.tools.computer_tools import make_computer_tools as _mct
+    _ctools = {t.name: t for t in _mct()}
+    check("computer tools load (8) regardless of display/pyautogui availability",
+          len(_ctools) == 8 and "mouse_click" in _ctools)
+    check("mouse_click rejects an invalid button before acting",
+          "Invalid button" in _ctools["mouse_click"].fn(button="banana").get("error", ""))
+    check("type_text refuses an oversized payload",
+          "too long" in _ctools["type_text"].fn(text="x" * 6000).get("error", ""))
+    check("hotkey rejects a non-list keys argument",
+          "non-empty list" in _ctools["hotkey"].fn(keys="ctrl").get("error", ""))
+    import pathlib as _pl2
+    import tempfile as _tf2
+    _shdir = _pl2.Path(_tf2.mkdtemp())
+    for _i in range(45):
+        (_shdir / f"shot_s{_i:03d}.png").write_bytes(b"x")
+    _prune(_shdir, keep=40)
+    check("screenshot retention prunes to the newest N (no unbounded disk growth)",
+          len(list(_shdir.glob("shot_*.png"))) == 40)
+
     from aria2.core import db as _db
     bt = _db.one("PRAGMA busy_timeout")
     check("db busy_timeout is set", bt is not None and bt[0] >= 5000)

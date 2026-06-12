@@ -25,66 +25,129 @@ except Exception:  # pragma: no cover - missing display / lib
     AVAILABLE = False
 
 
+_MAX_TYPE = 5000   # cap a single type_text so a runaway can't flood input
+_MAX_SHOTS = 40    # keep only the most recent N screenshots (prevent disk bloat)
+
+
 def _need():
     return {"error": "pyautogui not installed — run: pip install pyautogui"}
+
+
+def _act(fn):
+    """Run a pyautogui action, converting the user's fail-safe abort and any
+    platform error into a clean tool result instead of a raised exception.
+
+    The fail-safe (mouse slammed to a screen corner) is the human's emergency
+    stop, so it gets a DISTINCT, explicit signal — otherwise it looked like a
+    generic 'Tool failed' the model might simply retry, defeating the abort."""
+    try:
+        return fn()
+    except pyautogui.FailSafeException:
+        return {"error": "Aborted by the user's fail-safe (mouse moved to a screen "
+                "corner). Stop the current action and ask the user how to proceed.",
+                "aborted": True}
+    except Exception as e:
+        return {"error": f"Computer action failed: {e}"}
+
+
+def _prune_screenshots(folder: Path, keep: int = _MAX_SHOTS) -> None:
+    """Delete all but the newest `keep` screenshots so captures don't grow without
+    bound on disk."""
+    try:
+        shots = sorted(folder.glob("shot_*.png"), key=lambda p: p.stat().st_mtime)
+        for old in shots[:-keep]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
 
 
 def make_computer_tools() -> list[Tool]:
     def take_screenshot() -> dict:
         if not AVAILABLE:
             return _need()
-        shots = config.app_dir() / "screenshots"
-        shots.mkdir(parents=True, exist_ok=True)
-        path = shots / f"shot_{new_id('s')}.png"
-        img = pyautogui.screenshot()
-        img.save(path)
-        return {"path": str(path), "width": img.width, "height": img.height}
+
+        def _do():
+            shots = config.app_dir() / "screenshots"
+            shots.mkdir(parents=True, exist_ok=True)
+            path = shots / f"shot_{new_id('s')}.png"
+            img = pyautogui.screenshot()
+            img.save(path)
+            _prune_screenshots(shots)
+            return {"path": str(path), "width": img.width, "height": img.height}
+        return _act(_do)
 
     def get_screen_size() -> dict:
         if not AVAILABLE:
             return _need()
-        w, h = pyautogui.size()
-        return {"width": w, "height": h}
+        return _act(lambda: dict(zip(("width", "height"), pyautogui.size())))
 
     def mouse_move(x: int, y: int) -> dict:
         if not AVAILABLE:
             return _need()
-        pyautogui.moveTo(int(x), int(y), duration=0.1)
-        return {"moved_to": [int(x), int(y)]}
+
+        def _do():
+            pyautogui.moveTo(int(x), int(y), duration=0.1)
+            return {"moved_to": [int(x), int(y)]}
+        return _act(_do)
 
     def mouse_click(x: int = None, y: int = None, button: str = "left",
                     clicks: int = 1) -> dict:
+        if button not in ("left", "right", "middle"):
+            return {"error": f"Invalid button '{button}' (use left, right, or middle)."}
         if not AVAILABLE:
             return _need()
-        kw = {"button": button, "clicks": int(clicks)}
-        if x is not None and y is not None:
-            kw.update(x=int(x), y=int(y))
-        pyautogui.click(**kw)
-        return {"clicked": True, "button": button, "clicks": int(clicks)}
+
+        def _do():
+            kw = {"button": button, "clicks": int(clicks)}
+            if x is not None and y is not None:
+                kw.update(x=int(x), y=int(y))
+            pyautogui.click(**kw)
+            return {"clicked": True, "button": button, "clicks": int(clicks)}
+        return _act(_do)
 
     def type_text(text: str) -> dict:
+        if len(text) > _MAX_TYPE:
+            return {"error": f"text too long ({len(text)} chars > {_MAX_TYPE} limit); "
+                    "split it into smaller chunks."}
         if not AVAILABLE:
             return _need()
-        pyautogui.typewrite(text, interval=0.01)
-        return {"typed": len(text)}
+
+        def _do():
+            pyautogui.typewrite(text, interval=0.01)
+            return {"typed": len(text)}
+        return _act(_do)
 
     def press_key(key: str) -> dict:
         if not AVAILABLE:
             return _need()
-        pyautogui.press(key)
-        return {"pressed": key}
+
+        def _do():
+            pyautogui.press(key)
+            return {"pressed": key}
+        return _act(_do)
 
     def hotkey(keys: list) -> dict:
+        if not isinstance(keys, list) or not keys:
+            return {"error": "keys must be a non-empty list, e.g. ['ctrl','c']."}
         if not AVAILABLE:
             return _need()
-        pyautogui.hotkey(*[str(k) for k in keys])
-        return {"hotkey": keys}
+
+        def _do():
+            pyautogui.hotkey(*[str(k) for k in keys])
+            return {"hotkey": keys}
+        return _act(_do)
 
     def scroll(amount: int) -> dict:
         if not AVAILABLE:
             return _need()
-        pyautogui.scroll(int(amount))
-        return {"scrolled": int(amount)}
+
+        def _do():
+            pyautogui.scroll(int(amount))
+            return {"scrolled": int(amount)}
+        return _act(_do)
 
     obj = {"type": "object"}
     return [
