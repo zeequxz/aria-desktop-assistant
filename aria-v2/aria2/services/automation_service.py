@@ -124,7 +124,8 @@ def fire(trigger_id: str, context: str = "") -> str:
                 cfg["chat_id"],
                 (result.text or "").strip() or f"(no reply — {result.status})")
 
-    threading.Thread(target=_worker, daemon=True, name=f"trigger-{trigger_id}").start()
+    from aria2.runtime import executor
+    executor.submit(_worker)
     return run_id
 
 

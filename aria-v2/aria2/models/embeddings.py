@@ -42,6 +42,53 @@ def cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+try:
+    import numpy as _np
+    _HAVE_NUMPY = True
+except Exception:  # numpy optional — fall back to the pure-Python loop
+    _HAVE_NUMPY = False
+
+
+def score_batch(query, blobs: list) -> list[float]:
+    """Cosine similarity of a query vector against many *packed* embeddings
+    (the per-turn recall/search hot path). Vectorised with numpy when available,
+    else the pure-Python loop. Same semantics as cosine(): a dimension mismatch
+    (e.g. mixed embedding providers) scores 0 — so retrieval degrades, not breaks.
+
+    `query` may be a packed BLOB or an already-unpacked vector."""
+    qv = unpack(query) if isinstance(query, (bytes, bytearray)) else list(query or [])
+    if not qv:
+        return [0.0] * len(blobs)
+    if _HAVE_NUMPY:
+        return _score_batch_np(qv, blobs)
+    return [cosine(qv, unpack(b)) for b in blobs]
+
+
+def _score_batch_np(qv: list, blobs: list) -> list[float]:
+    q = _np.asarray(qv, dtype=_np.float32)
+    d = q.shape[0]
+    qn = float(_np.linalg.norm(q)) or 1.0
+    out = [0.0] * len(blobs)
+    idxs, rows = [], []
+    for i, b in enumerate(blobs):
+        if not b:
+            continue
+        v = _np.frombuffer(b, dtype=_np.float32)
+        if v.shape[0] != d:  # different embedding dimension → score 0
+            continue
+        idxs.append(i)
+        rows.append(v)
+    if not rows:
+        return out
+    m = _np.vstack(rows)               # (k, d)
+    norms = _np.linalg.norm(m, axis=1)
+    norms[norms == 0] = 1.0
+    sims = (m @ q) / (norms * qn)      # (k,) — one matmul instead of k Python loops
+    for j, i in enumerate(idxs):
+        out[i] = float(sims[j])
+    return out
+
+
 # ── Local hashing embedding (offline fallback) ──────────────────────────────
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")

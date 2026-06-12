@@ -25,7 +25,7 @@ datas += collect_data_files("customtkinter")
 
 hiddenimports = [
     "anthropic", "openai", "requests",
-    "win32crypt",
+    "win32crypt", "numpy",
 ]
 hiddenimports += collect_submodules("customtkinter")
 

@@ -94,6 +94,10 @@ DEFAULTS: dict = {
     "temperature": 1.0,
     "prompt_caching": True,
     # ── Engine ────────────────────────────────────────────────────────────
+    # Max top-level runs executing at once (chat/trigger/messaging/fork). Excess
+    # work queues rather than spawning unbounded threads. Delegated sub-agents
+    # use a separate pool, so this doesn't throttle a single agent's fan-out.
+    "max_concurrent_runs": 8,
     "max_iterations": 40,
     "context_token_budget": 120_000,
     "default_run_budget_usd": 1.0,

@@ -98,11 +98,11 @@ def search(query: str, project_id: str, limit: int = 5) -> list[dict]:
     )
     if not rows:
         return []
-    qvec = embeddings.unpack(embeddings.embed(query))
+    qvec = embeddings.embed(query)
+    sims = embeddings.score_batch(qvec, [r["embedding"] for r in rows])
     qwords = set(_WORD.findall(query.lower()))
     scored = []
-    for r in rows:
-        sim = embeddings.cosine(qvec, embeddings.unpack(r["embedding"]))
+    for r, sim in zip(rows, sims):
         cwords = set(_WORD.findall(r["text"].lower()))
         overlap = len(qwords & cwords) / (len(qwords) or 1)
         score = 0.75 * sim + 0.25 * overlap

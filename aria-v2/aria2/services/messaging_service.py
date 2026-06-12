@@ -231,7 +231,8 @@ class TelegramBridge:
             except Exception as e:
                 self.send_message(chat, f"⚠ Error handling your message: {e}")
 
-        threading.Thread(target=_work, daemon=True, name=f"tg-msg-{chat}").start()
+        from aria2.runtime import executor
+        executor.submit(_work)
 
     def _drain_backlog(self):
         """Skip messages queued while the bot was offline by confirming pending

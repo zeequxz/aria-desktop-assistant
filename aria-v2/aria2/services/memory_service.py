@@ -67,11 +67,11 @@ def recall(query: str, scope: str, scope_id: str = "", limit: int = 6) -> list[d
     )
     if not rows:
         return []
-    qvec = embeddings.unpack(embeddings.embed(query))
+    qvec = embeddings.embed(query)
+    sims = embeddings.score_batch(qvec, [r["embedding"] for r in rows])
     now = now_ms()
     scored = []
-    for r in rows:
-        sim = embeddings.cosine(qvec, embeddings.unpack(r["embedding"]))
+    for r, sim in zip(rows, sims):
         age = now - (r["last_accessed"] or r["created_at"])
         recency = math.exp(-age / _RECENCY_HALFLIFE_MS)
         pin = 0.25 if r["pinned"] else 0.0

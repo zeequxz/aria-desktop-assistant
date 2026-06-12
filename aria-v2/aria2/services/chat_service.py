@@ -326,7 +326,8 @@ def send_async(chat_id: str, user_text: str, on_complete=None, dry_run: bool = F
         if on_complete:
             on_complete(result)
 
-    threading.Thread(target=_worker, daemon=True, name=f"chat-{chat_id}").start()
+    from aria2.runtime import executor
+    executor.submit(_worker)
     return run_id
 
 

@@ -595,6 +595,28 @@ def run_smoke() -> int:
           and _dbm.one("SELECT COUNT(*) n FROM observations WHERE kind='cctest'")["n"]
           == 80)
 
+    # ── v2.3.0: bounded RunExecutor + vectorised retrieval ────────────────────
+    from aria2.runtime import executor as _ex
+    _hits: list = []
+    _futs = [_ex.submit(lambda i=i: _hits.append(i)) for i in range(10)]
+    for f in _futs:
+        f.result(timeout=5)
+    check("RunExecutor runs all submitted top-level runs through the pool",
+          sorted(_hits) == list(range(10)) and _ex.inflight() >= 0)
+
+    from aria2.models import embeddings as _emb
+    _q = _emb.embed("alpha beta gamma")
+    _blobs = [_emb.embed(t) for t in
+              ["alpha beta", "totally different content here", "gamma alpha beta"]]
+    _np_scores = _emb.score_batch(_q, _blobs)
+    _py_scores = [_emb.cosine(_emb.unpack(_q), _emb.unpack(b)) for b in _blobs]
+    check("score_batch matches the pure-Python cosine loop (vectorised parity)",
+          len(_np_scores) == 3
+          and all(abs(a - b) < 1e-4 for a, b in zip(_np_scores, _py_scores))
+          and _np_scores[2] > _np_scores[1])
+    check("score_batch scores 0 on a dimension mismatch (mixed providers)",
+          _emb.score_batch(_q, [b"\x00\x00\x00\x00"])[0] == 0.0)
+
     config.set_key("telegram_allowlist", [])  # reset
 
     # ── Browser tools + outbound notify tool ──────────────────────────────────

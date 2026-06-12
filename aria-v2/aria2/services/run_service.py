@@ -117,7 +117,8 @@ def fork_from_step(run_id: str, step_idx: int, edited_user_text: str | None = No
         if on_complete:
             on_complete(result)
 
-    threading.Thread(target=_worker, daemon=True, name=f"fork-{new_run_id}").start()
+    from aria2.runtime import executor
+    executor.submit(_worker)
     return new_run_id
 
 

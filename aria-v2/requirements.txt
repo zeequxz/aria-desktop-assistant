@@ -1,6 +1,10 @@
 # Core UI
 customtkinter>=5.2.2
 
+# Vectorised memory/knowledge retrieval (optional at runtime — recall/search
+# fall back to a pure-Python loop if numpy is absent, just slower).
+numpy>=1.26
+
 # AI providers (all optional at runtime — the app degrades gracefully if absent)
 anthropic>=0.40.0
 openai>=1.40.0
