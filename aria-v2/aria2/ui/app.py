@@ -37,6 +37,7 @@ from aria2.ui.views.memory_view import MemoryView
 from aria2.ui.views.projects_view import ProjectsView
 from aria2.ui.views.runs_view import RunsView
 from aria2.ui.views.settings_view import SettingsView
+from aria2.ui.views.team_view import TeamView
 
 _NAV = [
     ("chat", "💬  Chat", ChatView),
@@ -47,6 +48,7 @@ _NAV = [
     ("connectors", "🔌  Connectors", ConnectorsView),
     ("automations", "⏱  Automations", AutomationsView),
     ("calendar", "📅  Calendar", CalendarView),
+    ("team", "🧭  Team", TeamView),
     ("runs", "📊  Runs", RunsView),
     ("evals", "🧪  Evals", EvalsView),
     ("settings", "⚙  Settings", SettingsView),

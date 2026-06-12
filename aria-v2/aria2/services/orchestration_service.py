@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from aria2.core import db, logs
 from aria2.core.events import bus
@@ -121,10 +122,31 @@ def tasks_for(leader_run_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def waves(tasks: list[dict]) -> list[list[dict]]:
+    """Group tasks into dependency *levels*: each level's tasks have all their
+    (known) deps satisfied by earlier levels, so a level can run in parallel."""
+    known = {t["ordinal"] for t in tasks}
+    done: set = set()
+    remaining = list(tasks)
+    out: list[list[dict]] = []
+    while remaining:
+        wave = [t for t in remaining
+                if all(d in done for d in t["depends_on"] if d in known)]
+        if not wave:  # cycle / unresolved — run the rest together
+            wave = remaining[:]
+        for t in wave:
+            done.add(t["ordinal"])
+            remaining.remove(t)
+        out.append(wave)
+    return out
+
+
 def _execute(goal, project, agent, chat_id, leader_run_id):
     from aria2.core import config
     log = logs.get("orchestration")
     settings = config.load()
+    auto_review = bool(settings.get("auto_review", True))
+    max_par = max(1, int(settings.get("orchestration_max_parallel", 3) or 3))
 
     def say(text: str):
         if chat_id:
@@ -149,23 +171,37 @@ def _execute(goal, project, agent, chat_id, leader_run_id):
         say("📋 **Plan**\n" + "\n".join(
             f"  {t['ordinal']}. [{t['role']}] {t['title']}" for t in tasks))
 
+        # Run level by level; independent tasks in a level run in parallel on a
+        # DEDICATED pool (never the global RunExecutor — a leader waiting on its
+        # tasks must not be able to starve top-level runs).
         outputs: dict[int, str] = {}
-        for t in topo_order(tasks):
-            db.update("tasks", t["id"], {"status": "running", "updated_at": now_ms()})
-            say(f"⚙ Step {t['ordinal']} · [{t['role']}] {t['title']}…")
-            out, ok = _run_task(t, outputs, project, settings, leader_run_id)
-            outputs[t["ordinal"]] = out
-            db.update("tasks", t["id"], {"status": "done" if ok else "failed",
-                                         "output": (out or "")[:4000],
-                                         "updated_at": now_ms()})
-            say((f"✓ Step {t['ordinal']} done" if ok
-                 else f"✗ Step {t['ordinal']} failed (continuing)"))
+        failures = 0
+        for wave in waves(tasks):
+            snapshot = dict(outputs)  # read-only deps for this wave (no race)
+            if len(wave) == 1:
+                results = [_run_one(wave[0], snapshot, project, settings,
+                                    leader_run_id, auto_review, say)]
+            else:
+                say(f"⚡ Running {len(wave)} steps in parallel…")
+                with ThreadPoolExecutor(max_workers=min(max_par, len(wave)),
+                                        thread_name_prefix="specialist") as pool:
+                    futs = [pool.submit(_run_one, t, snapshot, project, settings,
+                                        leader_run_id, auto_review, say) for t in wave]
+                    results = [f.result() for f in futs]
+            for ordinal, out, ok in results:
+                outputs[ordinal] = out
+                if not ok:
+                    failures += 1
 
         final = _merge(goal, tasks, outputs, settings, agent)
-        db.update("runs", leader_run_id, {"status": "done", "ended_at": now_ms()})
-        say(f"✅ **Result**\n{final}")
+        status = "done" if failures == 0 else "failed"
+        db.update("runs", leader_run_id, {"status": status, "ended_at": now_ms()})
+        ok_n = len(tasks) - failures
+        head = "✅ **Result**" if failures == 0 else f"⚠ **Result** ({failures} step(s) failed)"
+        say(f"{head}  ·  {ok_n}/{len(tasks)} steps ok\n{final}")
         bus.publish("orchestration.done", {"leader_run_id": leader_run_id,
-                                           "chat_id": chat_id, "text": final})
+                                           "chat_id": chat_id, "text": final,
+                                           "failures": failures})
     except Exception as e:
         log.exception(logs.j("leader_failed", run_id=leader_run_id, error=str(e)))
         db.update("runs", leader_run_id, {"status": "failed", "error": str(e),
@@ -187,6 +223,38 @@ def _persist_tasks(leader_run_id: str, plan: list[dict]) -> list[dict]:
         })
         out.append({**t, "id": tid})
     return out
+
+
+def _run_one(task, prior_outputs, project, settings, leader_run_id, auto_review, say):
+    """Run one task: execute the specialist, optionally auto-review code output,
+    validate (non-empty), and persist status. Returns (ordinal, output, ok)."""
+    o = task["ordinal"]
+    db.update("tasks", task["id"], {"status": "running", "updated_at": now_ms()})
+    say(f"⚙ Step {o} · [{task['role']}] {task['title']}…")
+    out, ok = _run_task(task, prior_outputs, project, settings, leader_run_id)
+    # Review gate: code output is critiqued by a reviewer before acceptance.
+    if ok and auto_review and (task.get("role") or "").lower() == "coder":
+        review = _review(task, out, project, settings)
+        if review:
+            out = f"{out}\n\n— Reviewer —\n{review}"
+            say(f"🔎 Reviewed step {o}")
+    ok = ok and bool((out or "").strip())  # deliverable validation: must produce
+    db.update("tasks", task["id"], {"status": "done" if ok else "failed",
+                                    "output": (out or "")[:4000],
+                                    "updated_at": now_ms()})
+    say(f"{'✓' if ok else '✗'} Step {o} {'done' if ok else 'failed'}")
+    return o, out, ok
+
+
+def _review(task, output, project, settings) -> str:
+    """One-shot reviewer critique of a code task's output."""
+    from aria2.services import agent_service
+    reviewer = agent_service.get("coder") or agent_service.get("assistant")
+    sys = ("You are a senior reviewer. Briefly review the work below for "
+           "correctness, bugs, and security in 2-4 sentences. If it's solid, say "
+           "so; otherwise note the top issues.")
+    user = f"Task: {task['title']}\n\nProduced:\n{(output or '')[:3000]}"
+    return _oneshot(sys, user, settings, reviewer)
 
 
 def _run_task(task, outputs, project, settings, leader_run_id) -> tuple[str, bool]:

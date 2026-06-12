@@ -98,6 +98,10 @@ DEFAULTS: dict = {
     # work queues rather than spawning unbounded threads. Delegated sub-agents
     # use a separate pool, so this doesn't throttle a single agent's fan-out.
     "max_concurrent_runs": 8,
+    # Project Leader (/team): how many independent tasks run in parallel, and
+    # whether code tasks get an automatic reviewer pass before acceptance.
+    "orchestration_max_parallel": 3,
+    "auto_review": True,
     "max_iterations": 40,
     "context_token_budget": 120_000,
     "default_run_budget_usd": 1.0,

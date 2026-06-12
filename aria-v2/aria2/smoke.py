@@ -871,6 +871,12 @@ def run_smoke() -> int:
         {"ordinal": 1, "title": "A", "depends_on": [], "role": "x"}])
     check("topo_order sorts tasks into dependency order",
           [t["ordinal"] for t in _td] == [1, 2])
+    check("waves groups tasks into parallel dependency levels",
+          [[t["ordinal"] for t in lvl] for lvl in _orch.waves([
+              {"ordinal": 1, "depends_on": [], "role": "x", "title": "a"},
+              {"ordinal": 2, "depends_on": [], "role": "x", "title": "b"},
+              {"ordinal": 3, "depends_on": [1, 2], "role": "x", "title": "c"}])]
+          == [[1, 2], [3]])
     check("role_to_agent maps specialist roles to built-in agents",
           _orch.role_to_agent("researcher") == "researcher"
           and _orch.role_to_agent("coder") == "coder"
@@ -898,11 +904,14 @@ def run_smoke() -> int:
             yield StreamEvent(type="done", stop_reason="end_turn")
 
     _orig_plan, _orig_reg = _orch._plan, _oreg.for_settings
+    # 1 & 2 are independent (run in parallel); 3 depends on both. 1 is code → reviewed.
     _orch._plan = lambda *aa, **kk: [
-        {"ordinal": 1, "title": "Step one", "description": "do one",
+        {"ordinal": 1, "title": "Write code", "description": "do one",
          "role": "coder", "depends_on": []},
-        {"ordinal": 2, "title": "Step two", "description": "do two",
-         "role": "writer", "depends_on": [1]}]
+        {"ordinal": 2, "title": "Research", "description": "do two",
+         "role": "researcher", "depends_on": []},
+        {"ordinal": 3, "title": "Summarise", "description": "do three",
+         "role": "writer", "depends_on": [1, 2]}]
     _oreg.for_settings = lambda s, o=None: (_OProv(), "fake")
     try:
         _lrid = _nid("run")
@@ -914,12 +923,16 @@ def run_smoke() -> int:
                      "started_at": now_ms()})
         _orch._execute("build x", p, a, None, _lrid)
         _ltasks = _orch.tasks_for(_lrid)
-        check("Project Leader executes the plan: tasks persisted + all done + run done",
-              len(_ltasks) == 2
+        _byord = {t["ordinal"]: t for t in _ltasks}
+        check("Project Leader runs a parallel wave + dependent step, all done",
+              len(_ltasks) == 3
               and all(t["status"] == "done" for t in _ltasks)
-              and _ltasks[1]["run_id"]
+              and _byord[3]["run_id"]
               and _dbm.one("SELECT status FROM runs WHERE id=?",
                            (_lrid,))["status"] == "done")
+        check("auto-review gate appends a reviewer critique to code tasks",
+              "— Reviewer —" in (_byord[1]["output"] or "")
+              and "— Reviewer —" not in (_byord[2]["output"] or ""))
     finally:
         _orch._plan, _oreg.for_settings = _orig_plan, _orig_reg
 
