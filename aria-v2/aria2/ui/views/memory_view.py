@@ -35,6 +35,14 @@ class MemoryView(ctk.CTkFrame):
             fg_color=theme.SURFACE, button_color=theme.SURFACE_2,
         )
         self.project_menu.pack(side="left")
+        # Manual cleanup of near-duplicate beliefs (consolidation also runs in the
+        # 6-hourly maintenance pass; this lets the user trigger it on demand).
+        w.ghost_button(bar, "🧹 Merge duplicates", self._consolidate,
+                       width=150, height=28).pack(side="left", padx=12)
+        # At-a-glance count of beliefs flagged for review (e.g. after a retraction).
+        self.review_lbl = ctk.CTkLabel(bar, text="", font=theme.f(-2),
+                                       text_color=theme.WARN)
+        self.review_lbl.pack(side="right")
 
         from aria2.ui.views.paned_view import make_paned
         left_pane, right_pane = make_paned(self, "sidebar_memory_width",
@@ -71,6 +79,8 @@ class MemoryView(ctk.CTkFrame):
             c.destroy()
         scope, scope_id = self._scope()
         mems = memory_service.list_memories(scope, scope_id)
+        flagged = sum(1 for m in mems if m.get("needs_review"))
+        self.review_lbl.configure(text=f"⚠ {flagged} need review" if flagged else "")
         if not mems:
             ctk.CTkLabel(self.list, text="No memories yet in this scope.",
                          font=theme.f(-1), text_color=theme.TEXT_FAINT).pack(
@@ -78,6 +88,16 @@ class MemoryView(ctk.CTkFrame):
             return
         for m in mems:
             self._row(m)
+
+    def _consolidate(self):
+        scope, scope_id = self._scope()
+        n = memory_service.consolidate(scope, scope_id)
+        self.app.toast(
+            f"Merged {n} duplicate{'' if n == 1 else 's'}" if n else "No duplicates found",
+            "success" if n else "info")
+        self.selected = None
+        self._refresh()
+        self._empty_detail()
 
     def _row(self, m: dict):
         active = m["id"] == self.selected
