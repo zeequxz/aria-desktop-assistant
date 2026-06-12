@@ -24,6 +24,24 @@ def _safe(base_dir: str, rel: str) -> Path | None:
     return target
 
 
+def _apply_edit(content: str, old: str, new: str, replace_all: bool):
+    """Compute an edited copy of `content`. Returns (new_content, count, error).
+    Mirrors a precise find/replace: old must exist, and be unique unless
+    replace_all — so a one-line change never silently rewrites the wrong spot."""
+    if old == new:
+        return None, 0, "old_string and new_string are identical."
+    count = content.count(old)
+    if count == 0:
+        return None, 0, "old_string not found in file."
+    if count > 1 and not replace_all:
+        return None, count, (f"old_string is not unique ({count} matches). Add "
+                             "surrounding context to make it unique, or set "
+                             "replace_all=true.")
+    new_content = (content.replace(old, new) if replace_all
+                   else content.replace(old, new, 1))
+    return new_content, (count if replace_all else 1), None
+
+
 def make_file_tools(base_dir: str, sandbox=None) -> list[Tool]:
     # In dry-run mode, all file ops route through the copy-on-write overlay so
     # the real project folder is untouched until the user commits.
@@ -60,6 +78,42 @@ def make_file_tools(base_dir: str, sandbox=None) -> list[Tool]:
             return {"path": path, "bytes": len(content.encode("utf-8"))}
         except Exception as e:
             return {"error": str(e)}
+
+    def edit_file(path: str, old_string: str, new_string: str,
+                  replace_all: bool = False) -> dict:
+        # Targeted find/replace — preferred over write_file for changing part of a
+        # file, since it never requires reproducing (and risking dropping) the rest.
+        if sandbox is not None:
+            cur = sandbox.read(path)
+            if "error" in cur:
+                return cur
+            new_content, count, err = _apply_edit(
+                cur.get("content", ""), old_string, new_string, replace_all)
+            if err:
+                return {"error": err}
+            res = sandbox.write(path, new_content)
+            if "error" in res:
+                return res
+            return {**res, "replacements": count}
+        p = _safe(base_dir, path)
+        if p is None:
+            return {"error": "Path escapes the project folder."}
+        if not p.exists():
+            return {"error": f"Not found: {path}"}
+        if p.is_dir():
+            return {"error": f"Is a directory, not a file: {path}"}
+        try:
+            content = p.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            return {"error": str(e)}
+        new_content, count, err = _apply_edit(content, old_string, new_string, replace_all)
+        if err:
+            return {"error": err}
+        try:
+            p.write_text(new_content, encoding="utf-8")
+        except Exception as e:
+            return {"error": str(e)}
+        return {"path": path, "replacements": count}
 
     def list_dir(path: str = ".") -> dict:
         if sandbox is not None:
@@ -104,6 +158,31 @@ def make_file_tools(base_dir: str, sandbox=None) -> list[Tool]:
                 "required": ["path", "content"],
             },
             write_file,
+            default_policy="ask",
+        ),
+        Tool(
+            "edit_file",
+            "Replace an exact substring in a file inside the project folder. "
+            "Prefer this over write_file for changing part of a file — you don't "
+            "reproduce the whole file, so nothing is accidentally dropped. "
+            "old_string must match exactly (including whitespace) and be unique "
+            "unless replace_all=true.",
+            {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "old_string": {"type": "string",
+                                   "description": "Exact text to find."},
+                    "new_string": {"type": "string",
+                                   "description": "Text to replace it with."},
+                    "replace_all": {"type": "boolean", "default": False,
+                                    "description": "Replace every occurrence "
+                                                   "instead of requiring a unique "
+                                                   "match."},
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+            edit_file,
             default_policy="ask",
         ),
         Tool(

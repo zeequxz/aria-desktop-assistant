@@ -88,7 +88,7 @@ def set_agent(chat_id: str, agent_id: str) -> None:
 
 _READ_TOOLS  = {"read_file", "list_dir", "search_knowledge", "recall", "remember",
                 "fetch_url", "web_search", "get_screen_size"}
-_WRITE_TOOLS = {"write_file"}
+_WRITE_TOOLS = {"write_file", "edit_file"}
 _SHELL_TOOLS = {"run_shell", "run_python"}
 _ALL_TOOLS   = _READ_TOOLS | _WRITE_TOOLS | _SHELL_TOOLS
 
@@ -199,6 +199,19 @@ def list_messages(chat_id: str, limit: int | None = None) -> list[dict]:
             "created_at": r["created_at"],
         })
     return out
+
+
+def delete_message(message_id: str) -> dict:
+    """Delete a single message from a chat. Returns the chat_id it belonged to
+    (so the caller can refresh) or an error."""
+    row = db.one("SELECT chat_id FROM messages WHERE id = ?", (message_id,))
+    if not row:
+        return {"error": "Message not found."}
+    chat_id = row["chat_id"]
+    db.delete("messages", message_id)
+    db.update("chats", chat_id, {"updated_at": now_ms()})
+    bus.publish("message.deleted", {"chat_id": chat_id, "message_id": message_id})
+    return {"deleted": True, "chat_id": chat_id}
 
 
 def _persist_message(chat_id, role, content, model=None, token_in=0, token_out=0, cost=0.0) -> str:

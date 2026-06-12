@@ -586,7 +586,7 @@ class ChatView(ctk.CTkFrame):
                          font=theme.f(-2), text_color=theme.TEXT_FAINT).pack(pady=6)
         for m in msgs:
             self._add_bubble(m["role"], _blocks_to_text(m["content"]),
-                             ts=m.get("created_at"))
+                             ts=m.get("created_at"), msg_id=m.get("id"))
 
     def _render_empty_state(self):
         """Friendly first-run / empty-chat guidance, with onboarding when no
@@ -615,7 +615,8 @@ class ChatView(ctk.CTkFrame):
                          font=theme.f(0), text_color=theme.TEXT_DIM, wraplength=420,
                          justify="center").pack()
 
-    def _add_bubble(self, role: str, text: str, ts: int | None = None):
+    def _add_bubble(self, role: str, text: str, ts: int | None = None,
+                    msg_id: str | None = None):
         when = ""
         if ts:
             try:
@@ -626,8 +627,22 @@ class ChatView(ctk.CTkFrame):
         b.pack(fill="x", padx=12, pady=4)
         if text:
             b.set_markdown(text)
+        if msg_id:  # persisted messages can be deleted
+            b.enable_delete(lambda mid=msg_id, bb=b: self._delete_message(mid, bb))
         self._scroll_bottom()
         return b
+
+    def _delete_message(self, msg_id: str, bubble):
+        from tkinter import messagebox
+        if not messagebox.askyesno(
+                "Delete message", "Delete this message? This cannot be undone.",
+                icon="warning", parent=self):
+            return
+        res = chat_service.delete_message(msg_id)
+        if res.get("error"):
+            self.app.toast(res["error"], "error")
+            return
+        bubble.destroy()
 
     def _scroll_bottom(self, delay: int = 0):
         """Scroll the transcript to the bottom. Use delay>0 after layout changes."""

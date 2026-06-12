@@ -27,7 +27,7 @@ from aria2.core.ids import new_id
 from aria2.runtime.tools.computer_tools import COMPUTER_TOOL_NAMES
 
 _SAFE = ["read_file", "list_dir", "search_knowledge", "recall", "remember"]
-_WRITE = ["write_file"]
+_WRITE = ["write_file", "edit_file"]
 _SHELL = ["run_shell", "run_python"]
 
 

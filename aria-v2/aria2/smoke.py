@@ -782,6 +782,28 @@ def run_smoke() -> int:
     check("file write rejects path traversal outside the project folder",
           "error" in esc)
 
+    # edit_file: precise find/replace — present + unique unless replace_all.
+    ftools["write_file"].fn(path="edit.txt", content="alpha beta alpha\n")
+    _e1 = ftools["edit_file"].fn(path="edit.txt", old_string="beta", new_string="GAMMA")
+    check("edit_file replaces a unique substring",
+          _e1.get("replacements") == 1
+          and ftools["read_file"].fn(path="edit.txt")["content"] == "alpha GAMMA alpha\n")
+    _e2 = ftools["edit_file"].fn(path="edit.txt", old_string="alpha", new_string="A")
+    check("edit_file refuses a non-unique match unless replace_all",
+          "error" in _e2 and "unique" in _e2["error"])
+    _e3 = ftools["edit_file"].fn(path="edit.txt", old_string="alpha",
+                                 new_string="A", replace_all=True)
+    check("edit_file replace_all replaces every occurrence",
+          _e3.get("replacements") == 2
+          and ftools["read_file"].fn(path="edit.txt")["content"] == "A GAMMA A\n")
+    check("edit_file errors clearly when old_string is absent",
+          "not found" in ftools["edit_file"].fn(
+              path="edit.txt", old_string="nope", new_string="x").get("error", ""))
+    from aria2.services import chat_service as _csmode
+    check("edit_file is classified as a write tool (auto-allowed in accept/auto)",
+          "edit_file" in _csmode._WRITE_TOOLS
+          and _csmode._MODE_POLICIES["accept"].get("edit_file") == "allow")
+
     # run_python executes via a temp file (no shell), so code containing quotes
     # and backslashes runs correctly — the old `python -c "<...>"` path mangled
     # these on Windows cmd.exe.
@@ -1185,6 +1207,15 @@ def run_smoke() -> int:
     chat_service.rename_chat(c_alpha["id"], "Renamed")
     check("rename_chat updates the title",
           chat_service.get_chat(c_alpha["id"])["title"] == "Renamed")
+    # delete_message removes a single message and reports its chat (for refresh).
+    _dm1 = chat_service._persist_message(c_alpha["id"], "user", [{"type": "text", "text": "keep"}])
+    _dm2 = chat_service._persist_message(c_alpha["id"], "user", [{"type": "text", "text": "drop"}])
+    _dres = chat_service.delete_message(_dm2)
+    _remain = [_m["id"] for _m in chat_service.list_messages(c_alpha["id"])]
+    check("delete_message removes one message and returns its chat_id",
+          _dres.get("chat_id") == c_alpha["id"]
+          and _dm2 not in _remain and _dm1 in _remain
+          and "error" in chat_service.delete_message("msg_does_not_exist"))
     chat_service.delete_chat(c_beta["id"])
     check("delete_chat removes the chat",
           chat_service.get_chat(c_beta["id"]) is None

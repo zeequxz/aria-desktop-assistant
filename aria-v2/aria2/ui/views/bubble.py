@@ -73,7 +73,7 @@ class MessageBubble(ctk.CTkFrame):
         self.bubble.pack(anchor="e" if self.is_user else "w",
                          padx=(90, 4) if self.is_user else (4, 90), fill="x")
 
-        head = ctk.CTkFrame(self.bubble, fg_color="transparent")
+        head = self._head = ctk.CTkFrame(self.bubble, fg_color="transparent")
         head.pack(fill="x", padx=12, pady=(6, 0))
         ctk.CTkLabel(head, text="You" if self.is_user else "ARIA",
                      font=theme.f(-2, "bold"),
@@ -110,6 +110,15 @@ class MessageBubble(ctk.CTkFrame):
         self.text.tag_configure("h2", font=(theme.FONT, size + 2, "bold"),
                                 spacing1=3, spacing3=2)
         self.text.configure(state="disabled")
+
+    def enable_delete(self, callback) -> None:
+        """Add a ✕ button to the header that removes this message (callback runs
+        the confirm + service delete). Only offered on persisted messages."""
+        btn = ctk.CTkButton(self._head, text="✕", width=24, height=20,
+                            fg_color="transparent", hover_color=theme.DANGER,
+                            text_color=theme.TEXT_FAINT, font=theme.f(-2),
+                            command=callback)
+        btn.pack(side="right", padx=(0, 2))
 
     # ── Content ────────────────────────────────────────────────────────────────
 

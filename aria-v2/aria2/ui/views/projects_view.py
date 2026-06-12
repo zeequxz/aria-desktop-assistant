@@ -302,5 +302,9 @@ class _ProjectEditDialog(ctk.CTkToplevel):
         }
         on_save = self._on_save
         pid = self._pid
+        parent = self.master
         self._close()
-        self.after(20, lambda: on_save(data, pid))
+        # Run the save on the (surviving) parent: an after() scheduled on this
+        # dialog is dropped when the dialog is destroyed a few ms later — which is
+        # why newly-created projects never appeared in the list.
+        parent.after(30, lambda: on_save(data, pid))
