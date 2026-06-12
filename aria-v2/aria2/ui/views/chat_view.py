@@ -647,13 +647,17 @@ class ChatView(ctk.CTkFrame):
         attachments = list(self._attachments)
         if (not text and not attachments) or not self.chat_id or self.active_run:
             return
-        if text.lower().startswith("/loop"):
-            # Loop prompting — handled locally, never sent to the model.
+        _low = text.lower()
+        if _low.startswith("/loop") or _low.startswith("/team"):
+            # Slash commands — handled locally, never sent to the model.
             self.input.delete("1.0", "end")
             self._autosize_input()
             from aria2.core import config as _cfg0
             _cfg0.set_key(f"draft_{self.project_id}", "")
-            self._handle_loop_command(text)
+            if _low.startswith("/team"):
+                self._handle_team_command(text)
+            else:
+                self._handle_loop_command(text)
             return
         self.input.delete("1.0", "end")
         self._autosize_input()  # shrink back to one line
@@ -774,6 +778,39 @@ class ChatView(ctk.CTkFrame):
                          ts=int(_t.time() * 1000))
         self._scroll_bottom()
 
+    # ── Project Leader (multi-agent orchestration) ────────────────────────────
+
+    def _handle_team_command(self, text: str):
+        """'/team <goal>' — kick off a Project Leader run in this chat."""
+        import time as _t
+        from aria2.services import (agent_service, orchestration_service,
+                                    project_service)
+        goal = text[5:].strip()
+        now = int(_t.time() * 1000)
+        if not goal:
+            self._add_bubble("assistant", orchestration_service.USAGE, ts=now)
+            self._scroll_bottom()
+            return
+        self._add_bubble("user", f"/team {goal}", ts=now)
+        chat = chat_service.get_chat(self.chat_id) or {}
+        agent = agent_service.get(chat.get("agent_id") or "assistant")
+        project = (project_service.get(self.project_id)
+                   or project_service.get("general"))
+        orchestration_service.start(goal, project=project, agent=agent,
+                                    chat_id=self.chat_id)
+        self._scroll_bottom()
+
+    def _on_orchestration_chat(self, payload):
+        """Live progress (plan / per-step / final) from a Project Leader run that
+        was started in this chat. Already persisted, so it's not double-rendered
+        on reopen."""
+        if payload.get("chat_id") != self.chat_id:
+            return
+        import time as _t
+        self._add_bubble("assistant", payload.get("text", ""),
+                         ts=int(_t.time() * 1000))
+        self._scroll_bottom()
+
     # ── Streaming events ──────────────────────────────────────────────────────────
 
     def _subscribe(self):
@@ -783,6 +820,8 @@ class ChatView(ctk.CTkFrame):
         self._unsubs.append(self.app.on_event("run.error",      self._on_error))
         self._unsubs.append(self.app.on_event("run.clear_text", self._on_clear_text))
         self._unsubs.append(self.app.on_event("loop.result",    self._on_loop_result))
+        self._unsubs.append(
+            self.app.on_event("orchestration.chat", self._on_orchestration_chat))
 
     def destroy(self):
         # Release bus subscriptions so a destroyed view (e.g. after a font-size

@@ -857,6 +857,72 @@ def run_smoke() -> int:
     check("host exec backend runs the command directly",
           _sbx.wrap_isolated("echo hi", ".", "host") == ("echo hi", True))
 
+    # ── Project Leader orchestration (Stage 1) ────────────────────────────────
+    from aria2.services import orchestration_service as _orch
+    _plan = _orch.parse_plan(
+        'sure ```json\n[{"id":1,"title":"A","role":"coder"},'
+        '{"id":2,"title":"B","depends_on":[1]}]\n``` done')
+    check("parse_plan reads a JSON task array (fences + prose); junk -> []",
+          [t["title"] for t in _plan] == ["A", "B"]
+          and _plan[1]["depends_on"] == [1]
+          and _orch.parse_plan("not json at all") == [])
+    _td = _orch.topo_order([
+        {"ordinal": 2, "title": "B", "depends_on": [1], "role": "x"},
+        {"ordinal": 1, "title": "A", "depends_on": [], "role": "x"}])
+    check("topo_order sorts tasks into dependency order",
+          [t["ordinal"] for t in _td] == [1, 2])
+    check("role_to_agent maps specialist roles to built-in agents",
+          _orch.role_to_agent("researcher") == "researcher"
+          and _orch.role_to_agent("coder") == "coder"
+          and _orch.role_to_agent("reviewer") == "coder"
+          and _orch.role_to_agent("unknown") == "assistant")
+
+    # Full leader run with a stubbed planner + a fake provider for specialists/merge.
+    from aria2.models import registry as _oreg
+
+    class _OProv:
+        name = "fake"
+
+        def capabilities(self, m):
+            from aria2.models.base import Capabilities
+            return Capabilities(supports_tools=False, supports_caching=False)
+
+        def count_tokens(self, t):
+            return len(t) // 4
+
+        def stream(self, model, system, messages, tools=None, max_tokens=4096,
+                   temperature=1.0, cache=True):
+            from aria2.models.base import StreamEvent
+            yield StreamEvent(type="text", text="ok output")
+            yield StreamEvent(type="usage", usage={"input": 3, "output": 2})
+            yield StreamEvent(type="done", stop_reason="end_turn")
+
+    _orig_plan, _orig_reg = _orch._plan, _oreg.for_settings
+    _orch._plan = lambda *aa, **kk: [
+        {"ordinal": 1, "title": "Step one", "description": "do one",
+         "role": "coder", "depends_on": []},
+        {"ordinal": 2, "title": "Step two", "description": "do two",
+         "role": "writer", "depends_on": [1]}]
+    _oreg.for_settings = lambda s, o=None: (_OProv(), "fake")
+    try:
+        _lrid = _nid("run")
+        _dbm.insert("runs", {"id": _lrid, "kind": "leader", "status": "running",
+                     "agent_id": a["id"], "project_id": p["id"], "chat_id": None,
+                     "parent_run_id": None, "trigger_id": None, "title": "team",
+                     "budget_usd": 0, "cost_usd": 0, "token_total": 0,
+                     "forked_from_run_id": None, "forked_from_step": None,
+                     "started_at": now_ms()})
+        _orch._execute("build x", p, a, None, _lrid)
+        _ltasks = _orch.tasks_for(_lrid)
+        check("Project Leader executes the plan: tasks persisted + all done + run done",
+              len(_ltasks) == 2
+              and all(t["status"] == "done" for t in _ltasks)
+              and _ltasks[1]["run_id"]
+              and _dbm.one("SELECT status FROM runs WHERE id=?",
+                           (_lrid,))["status"] == "done")
+    finally:
+        _orch._plan, _oreg.for_settings = _orig_plan, _orig_reg
+
     from aria2.core import db as _db
     bt = _db.one("PRAGMA busy_timeout")
     check("db busy_timeout is set", bt is not None and bt[0] >= 5000)

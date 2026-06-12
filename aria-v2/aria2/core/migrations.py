@@ -107,3 +107,23 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_prompt_versions_agent "
         "ON agent_prompt_versions(agent_id, version)"
     )
+
+    # Project Leader orchestration: a leader run owns a graph of tasks, each run
+    # by a specialist agent as a durable child run.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS tasks (
+            id            TEXT PRIMARY KEY,
+            leader_run_id TEXT NOT NULL,
+            ordinal       INTEGER,
+            title         TEXT,
+            description   TEXT,
+            role          TEXT,
+            agent_id      TEXT,
+            depends_on    TEXT DEFAULT '[]',
+            status        TEXT DEFAULT 'pending',
+            run_id        TEXT,
+            output        TEXT,
+            created_at    INTEGER NOT NULL,
+            updated_at    INTEGER)"""
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_leader ON tasks(leader_run_id)")
