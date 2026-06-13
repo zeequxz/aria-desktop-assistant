@@ -241,16 +241,13 @@ def webhook_url(trigger: dict) -> str:
 
 # ── File trigger helpers ────────────────────────────────────────────────────
 
-# Vendored / build dirs to skip when signing a watched folder — descending into
-# them would make every scheduler tick (~30s) walk node_modules etc.
-_IGNORE_DIRS = {"node_modules", "__pycache__", "venv", "dist", "build", "target",
-                "out", "bin", "obj", ".tox", ".mypy_cache", ".pytest_cache",
-                ".gradle", ".next", ".cache"}
-
-
 def _file_signature(path: str) -> tuple[float, int]:
-    """(latest mtime, file count) under a file/folder path — cheap change key."""
+    """(latest mtime, file count) under a file/folder path — cheap change key.
+    Skips vendored/hidden dirs (via fsutil) so a watched repo doesn't make every
+    scheduler tick (~30s) walk node_modules."""
     import os
+
+    from aria2.core import fsutil
 
     p = Path(path)
     if not p.exists():
@@ -258,16 +255,12 @@ def _file_signature(path: str) -> tuple[float, int]:
     if p.is_file():
         return (p.stat().st_mtime, 1)
     latest, count = 0.0, 0
-    for dirpath, dirs, files in os.walk(path):
-        # Prune ignored + hidden dirs in place so we never walk node_modules/.git.
-        dirs[:] = [d for d in dirs
-                   if d not in _IGNORE_DIRS and not d.startswith(".")]
-        for name in files:
-            try:
-                latest = max(latest, os.stat(os.path.join(dirpath, name)).st_mtime)
-                count += 1
-            except OSError:
-                pass
+    for dirpath, name in fsutil.walk_files(path):
+        try:
+            latest = max(latest, os.stat(os.path.join(dirpath, name)).st_mtime)
+            count += 1
+        except OSError:
+            pass
     return (latest, count)
 
 

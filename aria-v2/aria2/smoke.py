@@ -180,6 +180,13 @@ def run_smoke() -> int:
     check("file-trigger signature counts source only (skips node_modules)",
           _fsig(_ff)[1] == 1)
 
+    # Shared walk helper (single source of truth for the 3 call sites above):
+    # prunes vendored/hidden dirs, yields only real files.
+    from aria2.core import fsutil as _fsu
+    _names = {n for _dp, n in _fsu.walk_files(_ff)}
+    check("fsutil.walk_files yields source files and prunes ignored dirs",
+          _names == {"main.py"} and "node_modules" in _fsu.IGNORE_DIRS)
+
     # Re-embed migration: re-vectorise stored memory + knowledge with the current
     # provider (so switching embedding providers doesn't orphan old vectors).
     check("reembed_all re-embeds existing memory + knowledge",
