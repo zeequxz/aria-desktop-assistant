@@ -24,6 +24,21 @@ from aria2.ui import theme
 from aria2.ui.views import widgets as w
 from aria2.ui.views.bubble import MessageBubble
 
+# Starter prompts shown in an empty chat — one click prefills the composer, so a
+# new user discovers the powerful features (/team, /loop, memory) by trying them.
+# (label shown on the button, prompt prefilled — kept separate so the prefilled
+# text stays a clean command, e.g. the emoji can't break /team detection).
+_STARTER_PROMPTS = [
+    ("🧭  Build something with a team of agents",
+     "/team build a tip calculator as one HTML file, then test it"),
+    ("📁  Summarise this project's files",
+     "Summarise the files in this project's folder"),
+    ("🧠  See what ARIA remembers about you",
+     "What do you remember about me and my projects?"),
+    ("🔁  Set up a recurring check",
+     "/loop 1h check this project for changes and summarise them"),
+]
+
 
 class ChatView(ctk.CTkFrame):
     """A self-contained conversation surface (chat list + transcript + composer)
@@ -614,6 +629,28 @@ class ChatView(ctk.CTkFrame):
                                     "Ctrl+K for commands.",
                          font=theme.f(0), text_color=theme.TEXT_DIM, wraplength=420,
                          justify="center").pack()
+            # Clickable starter prompts — show a new user what's possible and let
+            # them one-click into the powerful features (/team, /loop, memory).
+            ex_col = ctk.CTkFrame(wrap, fg_color="transparent")
+            ex_col.pack(pady=(16, 0))
+            ctk.CTkLabel(ex_col, text="Try one of these", font=theme.f(-2),
+                         text_color=theme.TEXT_FAINT).pack(anchor="w", padx=4, pady=(0, 4))
+            for label, prompt in _STARTER_PROMPTS:
+                ctk.CTkButton(
+                    ex_col, text=label, anchor="w", height=34, width=440,
+                    corner_radius=8, fg_color=theme.SURFACE_2, hover_color=theme.HOVER,
+                    text_color=theme.TEXT_DIM, font=theme.f(-1),
+                    command=lambda p=prompt: self._starter(p)).pack(fill="x", pady=2)
+
+    def _starter(self, text: str):
+        """Prefill the composer with a starter prompt and focus it (one-click try)."""
+        try:
+            self.input.delete("1.0", "end")
+            self.input.insert("1.0", text)
+            self.input.focus_set()
+            self._autosize_input()
+        except Exception:
+            pass
 
     def _add_bubble(self, role: str, text: str, ts: int | None = None,
                     msg_id: str | None = None):
