@@ -241,18 +241,30 @@ def webhook_url(trigger: dict) -> str:
 
 # ── File trigger helpers ────────────────────────────────────────────────────
 
+# Vendored / build dirs to skip when signing a watched folder — descending into
+# them would make every scheduler tick (~30s) walk node_modules etc.
+_IGNORE_DIRS = {"node_modules", "__pycache__", "venv", "dist", "build", "target",
+                "out", "bin", "obj", ".tox", ".mypy_cache", ".pytest_cache",
+                ".gradle", ".next", ".cache"}
+
+
 def _file_signature(path: str) -> tuple[float, int]:
     """(latest mtime, file count) under a file/folder path — cheap change key."""
+    import os
+
     p = Path(path)
     if not p.exists():
         return (0.0, 0)
     if p.is_file():
         return (p.stat().st_mtime, 1)
     latest, count = 0.0, 0
-    for f in p.rglob("*"):
-        if f.is_file() and ".git" not in f.parts:
+    for dirpath, dirs, files in os.walk(path):
+        # Prune ignored + hidden dirs in place so we never walk node_modules/.git.
+        dirs[:] = [d for d in dirs
+                   if d not in _IGNORE_DIRS and not d.startswith(".")]
+        for name in files:
             try:
-                latest = max(latest, f.stat().st_mtime)
+                latest = max(latest, os.stat(os.path.join(dirpath, name)).st_mtime)
                 count += 1
             except OSError:
                 pass

@@ -169,6 +169,17 @@ def run_smoke() -> int:
           and "index.js" not in _kdocs and _kres["files"] == 2)
     project_service.delete(_kp["id"])
 
+    # File-trigger signature skips vendored dirs too (don't walk node_modules every
+    # scheduler tick) — counts only real source files under the watched folder.
+    from aria2.services.automation_service import _file_signature as _fsig
+    _ff = _tf4.mkdtemp()
+    _os4.makedirs(_os4.path.join(_ff, "node_modules"))
+    for _rel in ("main.py", "node_modules/dep.py"):
+        with open(_os4.path.join(_ff, _rel), "w", encoding="utf-8") as _fh:
+            _fh.write("x")
+    check("file-trigger signature counts source only (skips node_modules)",
+          _fsig(_ff)[1] == 1)
+
     # Re-embed migration: re-vectorise stored memory + knowledge with the current
     # provider (so switching embedding providers doesn't orphan old vectors).
     check("reembed_all re-embeds existing memory + knowledge",
