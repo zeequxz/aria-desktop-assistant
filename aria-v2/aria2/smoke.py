@@ -1508,6 +1508,13 @@ def run_smoke() -> int:
     from aria2.ui.views.command_palette import slash_command_entries
     _pf = []
     _slash = slash_command_entries(lambda p: _pf.append(p))
+    # Inline "/" autocomplete: filter the slash-command catalog as the user types.
+    from aria2.ui.views.slash_menu import filter_slash as _fsl
+    check("filter_slash suggests commands while typing the slash token, else none",
+          {c["name"] for c in _fsl("/")} == {"/team", "/loop"}
+          and [c["name"] for c in _fsl("/te")] == ["/team"]
+          and _fsl("/team ") == [] and _fsl("hello") == [] and _fsl("") == [])
+
     check("palette surfaces /team + /loop and they prefill the composer",
           any("/team" in e["label"] for e in _slash)
           and any("/loop" in e["label"] for e in _slash)

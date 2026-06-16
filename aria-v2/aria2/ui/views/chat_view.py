@@ -238,6 +238,15 @@ class ChatView(ctk.CTkFrame):
         self.input.bind("<Control-V>", self._on_paste, add="+")
         self.input.bind("<KeyRelease>", self._autosize_input, add="+")
         self.input.bind("<KeyRelease>", self._save_draft, add="+")
+        # Inline "/" command autocomplete (Claude-Code-style). KeyRelease updates
+        # the suggestion list; the nav keys are intercepted only while it's open.
+        from aria2.ui.views.slash_menu import SlashMenu
+        self.slash = SlashMenu(self, on_pick=self._apply_slash)
+        self.input.bind("<KeyRelease>", self._update_slash, add="+")
+        self.input.bind("<Up>", lambda e: "break" if self.slash.move(-1) else None)
+        self.input.bind("<Down>", lambda e: "break" if self.slash.move(1) else None)
+        self.input.bind("<Tab>", lambda e: "break" if self.slash.accept() else None)
+        self.input.bind("<Escape>", self._slash_escape)
 
         self.dry_chk = ctk.CTkCheckBox(field, text="Dry", font=theme.f(-2),
                                        width=20, checkbox_width=15, checkbox_height=15)
@@ -271,13 +280,43 @@ class ChatView(ctk.CTkFrame):
             self._autosize_input()
 
     def _on_return(self, event):
-        """Enter sends; Shift+Enter inserts a newline."""
+        """Enter sends; Shift+Enter inserts a newline. While the "/" suggestion
+        menu is open, Enter completes the highlighted command instead of sending."""
+        if self.slash.accept():
+            return "break"
         if event.state & 0x1:  # Shift held
             self.input.insert("insert", "\n")
             self._autosize_input()
             return "break"
         self._send()
         return "break"
+
+    def _update_slash(self, _event=None):
+        """Refresh the "/" suggestion menu from the current composer text."""
+        try:
+            self.slash.update_for(self.input.get("1.0", "end-1c"), self.input)
+        except Exception:
+            pass
+
+    def _slash_escape(self, _event=None):
+        if self.slash.visible:
+            self.slash.hide()
+            return "break"
+        return None
+
+    def _apply_slash(self, cmd: dict):
+        """Complete a picked slash command: replace the first-line command token
+        with the full command + a space, ready for the argument."""
+        full = self.input.get("1.0", "end-1c")
+        rest = ""
+        if "\n" in full:
+            _first, rest = full.split("\n", 1)
+            rest = "\n" + rest
+        self.input.delete("1.0", "end")
+        self.input.insert("1.0", f"{cmd['name']} {rest}")
+        self.input.mark_set("insert", "1.%d" % (len(cmd["name"]) + 1))
+        self.input.focus_set()
+        self._autosize_input()
 
     def _autosize_input(self, _event=None):
         """Grow from one line up to ~8, then scroll — the field tracks content."""
@@ -727,6 +766,7 @@ class ChatView(ctk.CTkFrame):
 
     def _send(self):
         from pathlib import Path
+        self.slash.hide()  # close the "/" suggestion menu if open
         text = self.input.get("1.0", "end").strip()
         attachments = list(self._attachments)
         if (not text and not attachments) or not self.chat_id or self.active_run:
