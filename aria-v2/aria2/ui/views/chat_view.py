@@ -39,6 +39,12 @@ _STARTER_PROMPTS = [
      "/loop 1h check this project for changes and summarise them"),
 ]
 
+# Slash commands handled locally in the composer (never sent to the model). The
+# dispatch matches the first token, so sub-commands (/team go, /loop stop) route
+# through their parent handler.
+_SLASH_COMMAND_NAMES = {"/team", "/loop", "/remember", "/compact",
+                        "/consolidate-memory", "/help"}
+
 
 class ChatView(ctk.CTkFrame):
     """A self-contained conversation surface (chat list + transcript + composer)
@@ -771,17 +777,14 @@ class ChatView(ctk.CTkFrame):
         attachments = list(self._attachments)
         if (not text and not attachments) or not self.chat_id or self.active_run:
             return
-        _low = text.lower()
-        if _low.startswith("/loop") or _low.startswith("/team"):
+        cmd = text.split(None, 1)[0].lower() if text.startswith("/") else ""
+        if cmd in _SLASH_COMMAND_NAMES:
             # Slash commands — handled locally, never sent to the model.
             self.input.delete("1.0", "end")
             self._autosize_input()
             from aria2.core import config as _cfg0
             _cfg0.set_key(f"draft_{self.project_id}", "")
-            if _low.startswith("/team"):
-                self._handle_team_command(text)
-            else:
-                self._handle_loop_command(text)
+            self._run_slash(cmd, text)
             return
         self.input.delete("1.0", "end")
         self._autosize_input()  # shrink back to one line
@@ -872,6 +875,81 @@ class ChatView(ctk.CTkFrame):
                 msg = f"⚠ {cmd['error']}\n\n{msg}"
             self._add_bubble("assistant", msg, ts=now)
         self._scroll_bottom()
+
+    def _run_slash(self, cmd: str, text: str):
+        if cmd == "/team":
+            self._handle_team_command(text)
+        elif cmd == "/loop":
+            self._handle_loop_command(text)
+        elif cmd == "/remember":
+            self._handle_remember_command(text)
+        elif cmd == "/compact":
+            self._handle_compact_command()
+        elif cmd == "/consolidate-memory":
+            self._handle_consolidate_command()
+        elif cmd == "/help":
+            self._handle_help_command()
+
+    def _handle_help_command(self):
+        import time as _t
+        from aria2.ui.views.slash_menu import SLASH_COMMANDS
+        now = int(_t.time() * 1000)
+        self._add_bubble("user", "/help", ts=now)
+        lines = ["**Slash commands** — type `/` in the box to autocomplete:"]
+        for c in SLASH_COMMANDS:
+            arg = f" {c['args']}" if c["args"] else ""
+            lines.append(f"  `{c['name']}{arg}` — {c['desc']}")
+        self._add_bubble("assistant", "\n".join(lines), ts=now)
+        self._scroll_bottom()
+
+    def _handle_remember_command(self, text: str):
+        import time as _t
+        from aria2.services import memory_service
+        now = int(_t.time() * 1000)
+        self._add_bubble("user", text, ts=now)
+        parts = text.split(None, 1)
+        fact = parts[1].strip() if len(parts) > 1 else ""
+        if not fact:
+            self._add_bubble("assistant", "Usage: `/remember <fact>` — e.g. "
+                             "`/remember I prefer metric units`.", ts=now)
+        else:
+            res = memory_service.remember(fact, scope="user", importance=0.7)
+            self._add_bubble("assistant",
+                             "🧠 Got it — I'll remember that." if res.get("stored")
+                             else "I already had that noted." if res.get("deduped")
+                             else "Couldn't store that.", ts=now)
+        self._scroll_bottom()
+
+    def _handle_consolidate_command(self):
+        import time as _t
+        from aria2.services import memory_service
+        now = int(_t.time() * 1000)
+        self._add_bubble("user", "/consolidate-memory", ts=now)
+        n = memory_service.consolidate("user")
+        if self.project_id:
+            n += memory_service.consolidate("project", self.project_id)
+        self._add_bubble("assistant",
+                         f"🧹 Merged {n} near-duplicate memor{'y' if n == 1 else 'ies'}."
+                         if n else "No duplicate memories to merge.", ts=now)
+        self._scroll_bottom()
+
+    def _handle_compact_command(self):
+        import time as _t
+        now = int(_t.time() * 1000)
+        if not self.chat_id:
+            return
+        res = chat_service.compact_chat(self.chat_id)
+        if res.get("error"):
+            self._add_bubble("assistant", f"Couldn't compact: {res['error']}", ts=now)
+            self._scroll_bottom()
+        elif not res.get("compacted"):
+            self._add_bubble("assistant", "Not enough history to compact yet.", ts=now)
+            self._scroll_bottom()
+        else:
+            # History was rewritten — reload to show the summary + recent turns.
+            self._render_transcript()
+            self.app.toast(
+                f"Compacted {res['removed']} older messages into a summary", "success")
 
     def _loop_button(self):
         """🔁 in the composer: turn the typed prompt into a loop (asks interval)."""

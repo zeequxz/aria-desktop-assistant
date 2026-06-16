@@ -1511,9 +1511,47 @@ def run_smoke() -> int:
     # Inline "/" autocomplete: filter the slash-command catalog as the user types.
     from aria2.ui.views.slash_menu import filter_slash as _fsl
     check("filter_slash suggests commands while typing the slash token, else none",
-          {c["name"] for c in _fsl("/")} == {"/team", "/loop"}
+          {"/team", "/loop", "/remember", "/compact", "/consolidate-memory", "/help"}
+          <= {c["name"] for c in _fsl("/")}
           and [c["name"] for c in _fsl("/te")] == ["/team"]
+          and [c["name"] for c in _fsl("/co")] == ["/compact", "/consolidate-memory"]
           and _fsl("/team ") == [] and _fsl("hello") == [] and _fsl("") == [])
+
+    # /compact: summarise older turns, keep recent ones (stubbed summariser).
+    from aria2.services import chat_service as _ccs
+    _comp = _ccs.create_chat(p["id"], agent_id=a["id"])
+    for _i in range(12):
+        _ccs._persist_message(_comp["id"], "user" if _i % 2 == 0 else "assistant",
+                              [{"type": "text", "text": f"msg {_i}"}])
+
+    class _SumProv:
+        name = "fake"
+
+        def capabilities(self, m):
+            return _Caps(supports_tools=False, supports_caching=False)
+
+        def count_tokens(self, t):
+            return 1
+
+        def stream(self, model, system, messages, tools=None, max_tokens=4096,
+                   temperature=1.0, cache=True):
+            yield _SEv(type="text", text="recap of the earlier discussion")
+            yield _SEv(type="done", stop_reason="end_turn")
+    _save_reg7 = _oreg.for_settings
+    _oreg.for_settings = lambda s, o=None: (_SumProv(), "fake")
+    try:
+        _before = len(_ccs.list_messages(_comp["id"]))
+        _cres = _ccs.compact_chat(_comp["id"], keep_recent=6)
+        _after = _ccs.list_messages(_comp["id"])
+        _has_summary = any(
+            m["content"] and isinstance(m["content"][0], dict)
+            and "Summary of earlier conversation" in m["content"][0].get("text", "")
+            for m in _after)
+        check("/compact summarises older turns into a recap and keeps recent ones",
+              _cres.get("compacted") is True and _cres.get("removed") == 6
+              and len(_after) < _before and _has_summary)
+    finally:
+        _oreg.for_settings = _save_reg7
 
     check("palette surfaces /team + /loop and they prefill the composer",
           any("/team" in e["label"] for e in _slash)

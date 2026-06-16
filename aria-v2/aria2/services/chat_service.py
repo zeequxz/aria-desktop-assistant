@@ -260,6 +260,70 @@ def _visible_assistant_content(content) -> list[dict]:
     return [b for b in content if isinstance(b, dict) and b.get("type") == "text"]
 
 
+def _content_text(content) -> str:
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text")
+    return str(content or "")
+
+
+def _summarise_messages(msgs: list[dict]) -> str:
+    """One-shot summary of a run of chat messages (for /compact). Empty on failure."""
+    from aria2.models import registry
+    try:
+        provider, model = registry.for_settings(config.load())
+    except Exception:
+        return ""
+    transcript = "\n".join(
+        f"{m['role'].upper()}: {_content_text(m['content'])[:600]}" for m in msgs)
+    buf = ""
+    try:
+        for ev in provider.stream(
+                model=model,
+                system=("Summarise this conversation excerpt into a dense paragraph, "
+                        "preserving decisions, facts, names, and outputs so work can "
+                        "continue."),
+                messages=[{"role": "user",
+                           "content": [{"type": "text", "text": transcript[:8000]}]}],
+                tools=None, max_tokens=600, cache=False):
+            if ev.type == "text":
+                buf += ev.text
+            elif ev.type == "error":
+                return ""
+    except Exception:
+        return ""
+    return buf.strip()
+
+
+def compact_chat(chat_id: str, keep_recent: int = 6) -> dict:
+    """Summarise the older turns of a chat into one recap message and keep the most
+    recent turns verbatim — shortening the thread (like Claude Code's /compact).
+    Returns {compacted, removed, kept} or {error}/{compacted: False}."""
+    msgs = list_messages(chat_id)
+    if len(msgs) <= keep_recent + 1:
+        return {"compacted": False}
+    older, recent = msgs[:-keep_recent], msgs[-keep_recent:]
+    # The recap is an assistant message; ensure the next kept turn is a user message
+    # so roles still alternate ([assistant recap, user, assistant, …]).
+    while recent and recent[0]["role"] != "user":
+        older.append(recent.pop(0))
+    if not older:
+        return {"compacted": False}
+    summary = _summarise_messages(older)
+    if not summary:
+        return {"error": "summary unavailable (no provider configured?)"}
+    for m in older:
+        db.delete("messages", m["id"])
+    ts = (recent[0]["created_at"] if recent else now_ms()) - 1
+    db.insert("messages", {
+        "id": new_id("msg"), "chat_id": chat_id, "parent_id": None, "role": "assistant",
+        "content_json": json.dumps(
+            [{"type": "text", "text": f"📝 **Summary of earlier conversation**\n{summary}"}]),
+        "model": None, "token_in": 0, "token_out": 0, "cost_usd": 0, "created_at": ts,
+    })
+    return {"compacted": True, "removed": len(older), "kept": len(recent)}
+
+
 def _history_for_engine(chat_id: str) -> list[dict]:
     """Messages in neutral format for the run engine (drop ids/metadata)."""
     return [{"role": m["role"], "content": m["content"]} for m in list_messages(chat_id)]

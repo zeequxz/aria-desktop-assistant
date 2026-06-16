@@ -19,6 +19,14 @@ SLASH_COMMANDS = [
      "desc": "Plan a goal and run it across specialist agents"},
     {"name": "/loop", "args": "<interval> <prompt>",
      "desc": "Repeat a prompt on a schedule (e.g. /loop 1h …)"},
+    {"name": "/remember", "args": "<fact>",
+     "desc": "Store something about you for ARIA to recall later"},
+    {"name": "/compact", "args": "",
+     "desc": "Summarise older messages to shorten this conversation"},
+    {"name": "/consolidate-memory", "args": "",
+     "desc": "Merge near-duplicate memories in this scope"},
+    {"name": "/help", "args": "",
+     "desc": "List the available slash commands"},
 ]
 
 
