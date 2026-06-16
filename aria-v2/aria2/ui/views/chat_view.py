@@ -43,7 +43,7 @@ _STARTER_PROMPTS = [
 # dispatch matches the first token, so sub-commands (/team go, /loop stop) route
 # through their parent handler.
 _SLASH_COMMAND_NAMES = {"/team", "/loop", "/remember", "/compact",
-                        "/consolidate-memory", "/help"}
+                        "/consolidate-memory", "/new", "/clear", "/help"}
 
 
 class ChatView(ctk.CTkFrame):
@@ -887,6 +887,10 @@ class ChatView(ctk.CTkFrame):
             self._handle_compact_command()
         elif cmd == "/consolidate-memory":
             self._handle_consolidate_command()
+        elif cmd == "/new":
+            self._handle_new_command()
+        elif cmd == "/clear":
+            self._handle_clear_command()
         elif cmd == "/help":
             self._handle_help_command()
 
@@ -932,6 +936,27 @@ class ChatView(ctk.CTkFrame):
                          f"🧹 Merged {n} near-duplicate memor{'y' if n == 1 else 'ies'}."
                          if n else "No duplicate memories to merge.", ts=now)
         self._scroll_bottom()
+
+    def _handle_new_command(self):
+        """/new — start a fresh chat in the current project and open it."""
+        new = chat_service.create_chat(self.project_id or "general")
+        self._open_chat(new["id"])
+        self.app.toast("Started a new chat", "info")
+
+    def _handle_clear_command(self):
+        """/clear — wipe this conversation's messages (use /new to keep the old one)."""
+        if not self.chat_id:
+            return
+        from tkinter import messagebox
+        if not messagebox.askyesno(
+                "Clear conversation",
+                "Delete all messages in this chat? This can't be undone.\n"
+                "(Use /new to start a fresh chat and keep this one.)",
+                icon="warning", parent=self):
+            return
+        chat_service.clear_chat(self.chat_id)
+        self._render_transcript()
+        self.app.toast("Conversation cleared", "info")
 
     def _handle_compact_command(self):
         import time as _t

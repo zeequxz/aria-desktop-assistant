@@ -16,29 +16,48 @@ from aria2.ui import theme
 # box on completion (command + trailing space, ready for the argument).
 SLASH_COMMANDS = [
     {"name": "/team", "args": "<goal>",
-     "desc": "Plan a goal and run it across specialist agents"},
+     "desc": "Plan a goal and run it across specialist agents",
+     "subs": [{"name": "go", "desc": "Run the plan that's awaiting approval"},
+              {"name": "cancel", "desc": "Discard the pending plan"}]},
     {"name": "/loop", "args": "<interval> <prompt>",
-     "desc": "Repeat a prompt on a schedule (e.g. /loop 1h …)"},
+     "desc": "Repeat a prompt on a schedule (e.g. /loop 1h …)",
+     "subs": [{"name": "stop", "desc": "Stop the recurring loop(s) in this chat"},
+              {"name": "list", "desc": "List the active loops"}]},
     {"name": "/remember", "args": "<fact>",
      "desc": "Store something about you for ARIA to recall later"},
     {"name": "/compact", "args": "",
      "desc": "Summarise older messages to shorten this conversation"},
     {"name": "/consolidate-memory", "args": "",
      "desc": "Merge near-duplicate memories in this scope"},
+    {"name": "/new", "args": "",
+     "desc": "Start a new chat"},
+    {"name": "/clear", "args": "",
+     "desc": "Clear this conversation"},
     {"name": "/help", "args": "",
      "desc": "List the available slash commands"},
 ]
 
 
 def filter_slash(text: str) -> list[dict]:
-    """Commands matching the composer while a slash command is being typed — i.e.
-    the first line starts with "/" and the command word isn't finished yet (no
-    space). Returns [] otherwise (so the menu closes once you start the argument)."""
+    """Commands matching the composer while a slash command is being typed.
+
+    - "/te"      → top-level commands whose name starts with the typed token.
+    - "/team g"  → sub-commands of /team starting with "g" (e.g. /team go).
+    - "/team build a game" or non-slash text → [] (menu closes; freeform arg)."""
     line = (text or "").split("\n", 1)[0]
-    if not line.startswith("/") or " " in line:
+    if not line.startswith("/"):
         return []
-    q = line[1:].lower()
-    return [c for c in SLASH_COMMANDS if c["name"][1:].lower().startswith(q)]
+    if " " not in line:
+        q = line[1:].lower()
+        return [c for c in SLASH_COMMANDS if c["name"][1:].lower().startswith(q)]
+    # A space is present — offer sub-commands while the first arg token is typed.
+    head, _, tail = line.partition(" ")
+    parent = next((c for c in SLASH_COMMANDS if c["name"] == head.lower()), None)
+    if not parent or not parent.get("subs") or " " in tail:
+        return []
+    t = tail.lower()
+    return [{"name": f"{parent['name']} {s['name']}", "args": "", "desc": s["desc"]}
+            for s in parent["subs"] if s["name"].startswith(t)]
 
 
 class SlashMenu(ctk.CTkFrame):

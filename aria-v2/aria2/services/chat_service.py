@@ -221,6 +221,15 @@ def list_messages(chat_id: str, limit: int | None = None) -> list[dict]:
     return out
 
 
+def clear_chat(chat_id: str) -> dict:
+    """Delete all messages in a chat (keep the chat itself). Used by /clear."""
+    rows = db.all("SELECT id FROM messages WHERE chat_id = ?", (chat_id,))
+    for r in rows:
+        db.delete("messages", r["id"])
+    db.update("chats", chat_id, {"updated_at": now_ms()})
+    return {"cleared": len(rows)}
+
+
 def delete_message(message_id: str) -> dict:
     """Delete a single message from a chat. Returns the chat_id it belonged to
     (so the caller can refresh) or an error."""

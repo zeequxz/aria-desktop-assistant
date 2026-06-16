@@ -1511,11 +1511,17 @@ def run_smoke() -> int:
     # Inline "/" autocomplete: filter the slash-command catalog as the user types.
     from aria2.ui.views.slash_menu import filter_slash as _fsl
     check("filter_slash suggests commands while typing the slash token, else none",
-          {"/team", "/loop", "/remember", "/compact", "/consolidate-memory", "/help"}
-          <= {c["name"] for c in _fsl("/")}
+          {"/team", "/loop", "/remember", "/compact", "/consolidate-memory",
+           "/new", "/clear", "/help"} <= {c["name"] for c in _fsl("/")}
           and [c["name"] for c in _fsl("/te")] == ["/team"]
           and [c["name"] for c in _fsl("/co")] == ["/compact", "/consolidate-memory"]
-          and _fsl("/team ") == [] and _fsl("hello") == [] and _fsl("") == [])
+          and _fsl("hello") == [] and _fsl("") == [])
+    check("filter_slash suggests sub-commands after the parent (/team go, /loop stop)",
+          [c["name"] for c in _fsl("/team ")] == ["/team go", "/team cancel"]
+          and [c["name"] for c in _fsl("/team g")] == ["/team go"]
+          and [c["name"] for c in _fsl("/loop s")] == ["/loop stop"]
+          and _fsl("/team build a game") == []  # freeform arg → no menu
+          and _fsl("/remember x") == [])         # command without subs
 
     # /compact: summarise older turns, keep recent ones (stubbed summariser).
     from aria2.services import chat_service as _ccs
@@ -1552,6 +1558,11 @@ def run_smoke() -> int:
               and len(_after) < _before and _has_summary)
     finally:
         _oreg.for_settings = _save_reg7
+
+    # /clear empties the current chat's messages (keeps the chat).
+    _clr = _ccs.clear_chat(_comp["id"])
+    check("/clear deletes all messages in the chat",
+          _clr["cleared"] >= 1 and len(_ccs.list_messages(_comp["id"])) == 0)
 
     check("palette surfaces /team + /loop and they prefill the composer",
           any("/team" in e["label"] for e in _slash)
